@@ -1,5 +1,5 @@
 use crate::protocol;
-use std::{ffi::OsString, path::PathBuf, sync::Arc};
+use std::{ffi::OsString, os::unix::fs::PermissionsExt, path::PathBuf, sync::Arc};
 
 use smithay::{
     desktop::{layer_map_for_output, PopupManager, Space, Window, WindowSurfaceType},
@@ -87,6 +87,13 @@ pub struct TontooCompositor {
 
     /// Cached render textures to avoid recomputing every frame.
     pub render_cache: RenderCache,
+
+    /// Set when something requested a new frame (input, Wayland commit, ...).
+    /// Consumed by the udev render pump so an idle desktop does no DRM commits.
+    pub pending_redraw: bool,
+
+    /// Time of the last executed render pass, used as real `dt` for animations.
+    pub last_render: std::time::Instant,
 
     #[cfg(feature = "udev")]
     pub udev_data: Option<crate::udev::UdevData>,
@@ -178,6 +185,8 @@ impl TontooCompositor {
             tontoo_ui: TontooUiState::default(),
             focused_surface: None,
             render_cache,
+            pending_redraw: false,
+            last_render: start_time,
             #[cfg(feature = "udev")]
             udev_data: None,
         }
@@ -187,7 +196,52 @@ impl TontooCompositor {
         display: Display<TontooCompositor>,
         event_loop: &mut EventLoop<Self>,
     ) -> OsString {
-        let listening_socket = ListeningSocketSource::new_auto().unwrap();
+        let listening_socket = match ListeningSocketSource::new_auto() {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("ListeningSocketSource::new_auto failed ({:?}), trying XDG fallback", e);
+                // Fallback: ensure XDG_RUNTIME_DIR is set to /run/user/<uid> or /tmp
+                let fallback_dir = std::env::var("XDG_RUNTIME_DIR")
+                    .ok()
+                    .map(PathBuf::from)
+                    .or_else(|| dirs::runtime_dir())
+                    .or_else(|| {
+                        // Last resort: /run/user/<uid> or /tmp
+                        let uid = unsafe { libc::getuid() };
+                        let p = PathBuf::from(format!("/run/user/{}", uid));
+                        if !p.exists() {
+                            let _ = std::fs::create_dir_all(&p);
+                            let _ = std::os::unix::fs::chown(&p, Some(uid), Some(uid));
+                            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700));
+                        }
+                        if p.exists() {
+                            Some(p)
+                        } else {
+                            let tmp = PathBuf::from(format!("/tmp/runtime-{}", uid));
+                            let _ = std::fs::create_dir_all(&tmp);
+                            Some(tmp)
+                        }
+                    });
+                if let Some(dir) = &fallback_dir {
+                    let _ = std::fs::create_dir_all(dir);
+                    unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir); }
+                    tracing::info!("Set XDG_RUNTIME_DIR fallback to {}", dir.display());
+                    match ListeningSocketSource::new_auto() {
+                        Ok(s2) => s2,
+                        Err(e2) => {
+                            panic!(
+                                "Failed to create wayland socket even after XDG fallback to {}: {:?} (original: {:?})",
+                                dir.display(),
+                                e2,
+                                e
+                            )
+                        }
+                    }
+                } else {
+                    panic!("Failed to create wayland socket: {:?} (no fallback dir)", e);
+                }
+            }
+        };
         let socket_name = listening_socket.socket_name().to_os_string();
 
         let loop_handle = event_loop.handle();
@@ -256,17 +310,13 @@ impl TontooCompositor {
     }
 
     pub fn request_redraw(&mut self) {
-        #[cfg(feature = "udev")]
-        crate::udev::try_render_all(self);
+        self.pending_redraw = true;
     }
 
     /// Tick the animation manager and trigger a redraw if animations are still active.
     pub fn request_redraw_with_animation(&mut self, dt: std::time::Duration) {
+        self.pending_redraw = true;
         self.animation_manager.tick(dt);
-        if self.animation_manager.has_active() {
-            #[cfg(feature = "udev")]
-            crate::udev::try_render_all(self);
-        }
     }
 
     pub fn set_color_scheme(&mut self, scheme: crate::config::ColorScheme) {
@@ -276,6 +326,7 @@ impl TontooCompositor {
         if let Err(e) = crate::config::save_color_scheme(scheme) {
             tracing::error!("Failed to save color scheme: {}", e);
         }
+        self.pending_redraw = true;
         tracing::info!("Color scheme changed to {:?}", scheme);
     }
 }

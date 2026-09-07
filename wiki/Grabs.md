@@ -119,5 +119,5 @@ top or left edges.
 
 ## Cross References
 
-- [WaylandHandlers.md](WaylandHandlers.md) -- move/resize requests initiate grabs
-- [Input.md](Input.md) -- titlebar drag starts a `MoveSurfaceGrab`
+- [WaylandHandlers.md](WaylandHandlers.md) -- move/resize requests initiate grabs (CSD: clients request move)
+- [Input.md](Input.md) -- move now via client `move_request`, no titlebar drag from compositor

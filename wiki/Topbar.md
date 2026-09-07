@@ -1,6 +1,8 @@
 # Topbar
 
-A simple glass top bar that can be used as an alternative to the full menubar.
+A simple glass top bar widget. It is not rendered by the compositor
+render pipeline; the system top bar is the external `Menubar.app`
+(see [Menubar.md](Menubar.md)).
 
 ## Topbar
 
@@ -41,5 +43,5 @@ Produces a single `GlassPanel` draw command with zero corner radius and
 ## Cross References
 
 - [Shell.md](Shell.md) -- `ShellState::topbar` field
-- [Menubar.md](Menubar.md) -- the full-featured menubar variant
+- [Menubar.md](Menubar.md) -- external `Menubar.app` system app
 - [Rendering.md](Rendering.md) -- topbar is rendered as a glass panel

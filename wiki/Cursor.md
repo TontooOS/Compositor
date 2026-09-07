@@ -122,7 +122,7 @@ Cursor name aliases are expanded (e.g. `"left_ptr"` also searches `"default"`,
 The module defines typed wrappers around `TextureRenderElement<GlesTexture>`
 for the compositor render element enum `TontooRenderElements`:
 
-`WallpaperElement`, `CursorTextureElement`, `MenuBarElement`,
+`WallpaperElement`, `CursorTextureElement`,
 `DockBarElement`, `WindowShadowElement`, `WindowBorderElement`,
 `WindowControlsElement`, `WindowTitlebarElement`, `TontooUiTextureElement`.
 

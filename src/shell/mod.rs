@@ -1,18 +1,15 @@
 pub mod dock;
 pub mod launcher;
-pub mod menubar;
 pub mod topbar;
 pub mod window_controls;
 
 pub use dock::Dock;
 pub use launcher::Launcher;
-pub use menubar::Menubar;
 pub use topbar::Topbar;
 pub use window_controls::WindowControls;
 
 pub struct ShellState {
     pub dock: Dock,
-    pub menubar: Menubar,
     pub launcher: Launcher,
     pub topbar: Topbar,
     /// Per-window traffic light state. Key is a string identifier for the window.
@@ -30,7 +27,6 @@ impl ShellState {
 
         Self {
             dock,
-            menubar: Menubar::new(),
             launcher: Launcher::new(),
             topbar: Topbar::new(),
             window_controls: std::collections::HashMap::new(),
@@ -53,7 +49,9 @@ impl ShellState {
         self.dock.height
     }
 
+    /// Reserved top strut for the external Menubar.app (system app, not
+    /// rendered by the compositor). Windows are placed below this area.
     pub fn menubar_height(&self) -> f32 {
-        self.menubar.height
+        30.0
     }
 }

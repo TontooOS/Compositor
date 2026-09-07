@@ -7,7 +7,6 @@ use smithay::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
 };
@@ -95,6 +94,9 @@ impl TontooCompositor {
                     time,
                     |_, _, _| FilterResult::Forward,
                 );
+                // Keyboard needs immediate visual feedback - don't wait for 16ms timer
+                self.pending_redraw = true;
+                let _ = self.loop_signal.wakeup();
             }
             InputEvent::PointerMotion { event, .. } => {
                 let delta = event.delta();
@@ -105,7 +107,6 @@ impl TontooCompositor {
                 drop(pointer);
                 self.cursor.update_speed(new_pos);
                 self.update_dock_hover(new_pos);
-                self.update_traffic_light_hover(new_pos);
                 self.update_tontoo_ui_hover(new_pos);
                 let under = self.surface_under(new_pos);
                 let pointer = self.seat.get_pointer().unwrap();
@@ -136,7 +137,6 @@ impl TontooCompositor {
                 let serial = SERIAL_COUNTER.next_serial();
                 self.cursor.update_speed(pos);
                 self.update_dock_hover(pos);
-                self.update_traffic_light_hover(pos);
                 let under = self.surface_under(pos);
                 let pointer = self.seat.get_pointer().unwrap();
 
@@ -177,9 +177,6 @@ impl TontooCompositor {
                                     // Bounce the icon
                                     self.shell.dock.bounce_icon(&icon_name);
                                     self.shell.dock.set_active_app(&icon_name);
-
-                                    // Update menubar app name
-                                    self.shell.menubar.set_app_name(&icon_name);
 
                                     // Launch the app
                                     Self::launch_app_static(&icon_name);
@@ -231,105 +228,11 @@ impl TontooCompositor {
                         }
                     }
 
-                    // ── 2. Window traffic light clicks + titlebar drag ──
-                    if !pointer.is_grabbed() {
-                        let mut needs_redraw = false;
-                        let mut clicked_window: Option<(smithay::desktop::Window, i32, i32, f32, f32, Option<crate::shell::window_controls::TrafficLightAction>)> = None;
+                    // NOTE: Server-side titlebar/traffic lights removed — CSD mode.
+                    // Apps now draw their own decoration. Window move is handled via
+                    // xdg_toplevel move_request from the client (see handlers/xdg_shell.rs).
 
-                        // First pass: find the clicked window (immutable borrow only)
-                        for window in self.space.elements() {
-                            if let Some(geo) = self.space.element_geometry(window) {
-                                let win_x = geo.loc.x as f32;
-                                let win_y = geo.loc.y as f32;
-                                let win_w = geo.size.w as f32;
-                                let tb_h = crate::config::TITLEBAR_HEIGHT as f32;
-                                let tb_y = win_y - tb_h;
-
-                                let rel_x = pos.x as f32 - win_x;
-                                let rel_y_tb = pos.y as f32 - tb_y;
-
-                                if rel_x >= 0.0 && rel_x < win_w && rel_y_tb >= 0.0 && rel_y_tb < tb_h {
-                                    let window_id = format!("{}_{}", win_x as i32, win_y as i32);
-
-                                    if !self.shell.window_controls.contains_key(&window_id) {
-                                        self.shell.window_controls.insert(
-                                            window_id.clone(),
-                                            crate::shell::window_controls::WindowControls::new(),
-                                        );
-                                    }
-
-                                    if let Some(action) = self.shell.window_controls[&window_id].hit_test(rel_x, rel_y_tb) {
-                                        clicked_window = Some((window.clone(), win_x as i32, win_y as i32, rel_x, rel_y_tb, Some(action)));
-                                    } else {
-                                        clicked_window = Some((window.clone(), win_x as i32, win_y as i32, rel_x, rel_y_tb, None));
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Second pass: handle the click (mutable borrow OK now)
-                        if let Some((window, win_x, win_y, _rel_x, _rel_y_tb, action)) = clicked_window {
-                            if let Some(action) = action {
-                                // Traffic light clicked
-                                tracing::info!("Traffic light clicked: {:?} on window at ({}, {})", action, win_x, win_y);
-                                match action {
-                                    crate::shell::window_controls::TrafficLightAction::Close => {
-                                        window.toplevel().unwrap().send_close();
-                                        needs_redraw = true;
-                                    }
-                                    crate::shell::window_controls::TrafficLightAction::Minimize => {
-                                        needs_redraw = true;
-                                    }
-                                    crate::shell::window_controls::TrafficLightAction::Maximize => {
-                                        let is_maximized = window.toplevel().unwrap().current_state().states.contains(xdg_toplevel::State::Maximized);
-                                        window.toplevel().unwrap().with_pending_state(|state| {
-                                            if is_maximized {
-                                                state.states.unset(xdg_toplevel::State::Maximized);
-                                                state.size = None;
-                                            } else {
-                                                state.states.set(xdg_toplevel::State::Maximized);
-                                                state.size = None;
-                                            }
-                                        });
-                                        window.toplevel().unwrap().send_pending_configure();
-                                        needs_redraw = true;
-                                    }
-                                }
-                            } else {
-                                // Titlebar clicked (not on traffic lights) → start move grab
-                                if let Some(geo) = self.space.element_geometry(&window) {
-                                    let window_surface = window.toplevel().unwrap().wl_surface().clone();
-                                    self.space.raise_element(&window, true);
-                                    keyboard.set_focus(self, Some(window_surface.clone()), serial);
-                                    self.focused_surface = Some(window_surface.clone());
-
-                                    let start_data = smithay::input::pointer::GrabStartData {
-                                        focus: None,
-                                        location: pos,
-                                        button,
-                                    };
-
-                                    if button == 0x110 {
-                                        let grab = crate::grabs::MoveSurfaceGrab {
-                                            start_data,
-                                            window: window.clone(),
-                                            initial_window_location: geo.loc,
-                                        };
-                                        pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
-                                        tracing::info!("Titlebar drag started on window at ({}, {})", win_x, win_y);
-                                    }
-                                }
-                            }
-                            return;
-                        }
-
-                        if needs_redraw {
-                            self.request_redraw();
-                        }
-                    }
-
-                    // ── 2. Window clicks (2-click behavior) ──
+                    // ── 2. Window clicks (2-click focus behavior) ──
                     if !pointer.is_grabbed() {
                         if let Some((window, _loc)) = self
                             .space
@@ -366,7 +269,6 @@ impl TontooCompositor {
                                     .or_else(|| get_window_title(&window))
                                     .unwrap_or_else(|| "TontooOS".to_string());
                                 self.shell.dock.set_active_app(&app_name);
-                                self.shell.menubar.set_app_name(&app_name);
 
                                 return;
                             }
@@ -381,7 +283,6 @@ impl TontooCompositor {
                             // Clear focused state
                             self.focused_surface = None;
                             self.shell.dock.clear_active_app();
-                            self.shell.menubar.set_app_name("TontooOS");
                         }
                     }
                 }
@@ -487,39 +388,6 @@ impl TontooCompositor {
                     }
                 }
                 self.shell.dock.set_hover(hovered);
-            }
-        }
-    }
-
-    /// Update traffic light hover state based on pointer position.
-    fn update_traffic_light_hover(&mut self, pos: Point<f64, Logical>) {
-        for window in self.space.elements() {
-            if let Some(geo) = self.space.element_geometry(window) {
-                let win_x = geo.loc.x as f32;
-                let win_y = geo.loc.y as f32;
-                let win_w = geo.size.w as f32;
-                let tb_h = crate::config::TITLEBAR_HEIGHT as f32;
-                let tb_y = win_y - tb_h;
-
-                let rel_x = pos.x as f32 - win_x;
-                let rel_y = pos.y as f32 - tb_y;
-
-                let window_id = format!("{}_{}", win_x as i32, win_y as i32);
-
-                let is_in_area = rel_x >= 0.0 && rel_x < win_w
-                    && rel_y >= 0.0 && rel_y < tb_h
-                    && crate::shell::window_controls::WindowControls::is_in_area(rel_x, rel_y);
-
-                if !self.shell.window_controls.contains_key(&window_id) {
-                    self.shell.window_controls.insert(
-                        window_id.clone(),
-                        crate::shell::window_controls::WindowControls::new(),
-                    );
-                }
-
-                if let Some(ctrl) = self.shell.window_controls.get_mut(&window_id) {
-                    ctrl.hovered = is_in_area;
-                }
             }
         }
     }

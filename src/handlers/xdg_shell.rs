@@ -43,7 +43,8 @@ impl XdgShellHandler for TontooCompositor {
         });
         surface.send_configure();
         let window = Window::new_wayland_window(surface);
-        // Place window below the menubar (28px) with some padding
+        // Place window below the reserved top strut for the external
+        // Menubar.app (30px) with some padding
         self.space.map_element(window, (30, 40), false);
         self.request_redraw();
     }

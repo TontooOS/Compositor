@@ -39,12 +39,15 @@ impl WlrLayerShellHandler for TontooCompositor {
             if let Err(e) = map.map_layer(&desktop_surface) {
                 tracing::error!("Failed to map layer surface: {:?}", e);
             }
+            self.pending_redraw = true;
         } else {
             tracing::warn!("No output available for layer surface");
         }
     }
 
-    fn ack_configure(&mut self, _surface: WlSurface, _configure: LayerSurfaceConfigure) {}
+    fn ack_configure(&mut self, _surface: WlSurface, _configure: LayerSurfaceConfigure) {
+        self.pending_redraw = true;
+    }
 
     fn layer_destroyed(&mut self, surface: LayerSurface) {
         tracing::info!("Layer surface destroyed");
@@ -58,6 +61,7 @@ impl WlrLayerShellHandler for TontooCompositor {
                 }
             }
         }
+        self.pending_redraw = true;
     }
 }
 

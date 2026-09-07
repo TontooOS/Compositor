@@ -8,7 +8,6 @@ state object. It is stored on `TontooCompositor` as `self.shell`.
 ```rust
 pub struct ShellState {
     pub dock: Dock,
-    pub menubar: Menubar,
     pub launcher: Launcher,
     pub topbar: Topbar,
     pub window_controls: std::collections::HashMap<String, WindowControls>,
@@ -22,7 +21,7 @@ pub fn new() -> Self
 ```
 
 Creates the shell state with a pre-populated dock containing five icons:
-Finder, Terminal, Settings, Notes, Podcasts. The menubar, launcher, and topbar
+Finder, Terminal, Settings, Notes, Podcasts. The launcher and topbar
 are initialized to their defaults. The `window_controls` map starts empty.
 
 ### ShellState::launcher_visible
@@ -55,19 +54,23 @@ Returns the dock panel height in logical pixels (currently 78.0).
 pub fn menubar_height(&self) -> f32
 ```
 
-Returns the menubar height in logical pixels (currently 28.0).
+Returns the reserved top strut for the external `Menubar.app` system app
+in logical pixels (currently 30.0). The compositor renders nothing there;
+windows are placed below the strut. See [Menubar.md](Menubar.md).
 
 ## Window Controls Map
 
 The `window_controls` field maps window identifiers
-(`"{x}_{y}"` strings) to their `WindowControls` traffic-light state. Entries
-are created on first hit-test and persist for the lifetime of the compositor.
+(`"{x}_{y}"` strings) to their `WindowControls` traffic-light state. Kept for
+backward compatibility but **no longer used by the compositor** (CSD: apps draw
+own traffic lights). Apps can still reuse the helper.
 
 ## Cross References
 
 - [State.md](State.md) -- `TontooCompositor::shell` field
 - [Dock.md](Dock.md) -- the `Dock` component
-- [Menubar.md](Menubar.md) -- the `Menubar` component
+- [Menubar.md](Menubar.md) -- external `Menubar.app` system app (removed
+  from the compositor; only the top strut remains)
 - [Launcher.md](Launcher.md) -- the `Launcher` component
 - [Topbar.md](Topbar.md) -- the `Topbar` component
 - [WindowControls.md](WindowControls.md) -- the `WindowControls` component

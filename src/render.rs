@@ -1,6 +1,5 @@
 use std::time::{Duration, Instant};
 
-use image::GenericImageView;
 use smithay::{
     backend::{
         allocator::Fourcc,
@@ -19,14 +18,10 @@ use smithay::{
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
     utils::{Physical, Point, Rectangle, Size, Transform},
-    wayland::{
-        compositor::with_states,
-        shell::xdg::XdgToplevelSurfaceData,
-    },
 };
 
 use crate::cursor::{
-    CursorRenderElement, CursorTextureElement, DockBarElement, MenuBarElement,
+    CursorRenderElement, CursorTextureElement, DockBarElement,
     TontooRenderElements, WallpaperElement, WindowBorderElement, WindowControlsElement,
     WindowShadowElement, WindowTitlebarElement,
 };
@@ -158,15 +153,16 @@ pub fn init_winit(
                         let mut all_elements: Vec<TontooRenderElements> =
                             Vec::with_capacity(space_elements.len() + 8);
 
-                        // Z-order: Wallpaper → Window Shadows → Space → Window Borders → Window Controls → Dock → Menubar → Cursor
+                        // Z-order: Wallpaper → Window Shadows → Space → Window Borders → Window Controls → Dock → Cursor
+                        // NOTE: no compositor-side menubar. The top bar is the external
+                        // Menubar.app system app (starts via LaunchPad, reserves 30px strut).
 
                         // Wallpaper (bottommost)
                         if let Some(wp) = wallpaper_element {
                             all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(wp)));
                         }
 
-                        // Window shadows + borders (macOS-style decorations)
-                        {
+                        if false {
                             let blur = crate::render::WINDOW_SHADOW_BLUR;
                             let pad = blur as i32 + 4;
                             let offset_y = crate::render::WINDOW_SHADOW_OFFSET_Y;
@@ -218,9 +214,9 @@ pub fn init_winit(
                             all_elements.push(TontooRenderElements::Space(elem));
                         }
 
-                        // Window titlebar panels (server-side decoration) — glass + traffic lights + title
-                        // Drawn ABOVE the window content (offset by -TITLEBAR_HEIGHT)
-                        {
+                        if false {
+                            // Window titlebar panels disabled - now handled by GTK CSD
+                            
                             for window in state.space.elements() {
                                 if let Some(geo) = state.space.element_geometry(window) {
                                     let win_x = geo.loc.x as f32;
@@ -339,7 +335,7 @@ pub fn init_winit(
 
                                     // Window title text — centered in titlebar
                                     {
-                                        let title = crate::get_window_title(window)
+                                        let title = crate::state::get_window_title(window)
                                             .unwrap_or_else(|| "TontooOS".to_string());
 
                                         let tb_text_color = if state.color_scheme == crate::config::ColorScheme::Dark {
@@ -530,113 +526,9 @@ pub fn init_winit(
                             }
                         }
 
-                        // Menu bar (glass panel at top)
-                        {
-                            let menu_h = 28.0;
-
-                            // Glass panel background
-                            let menubar_key = (screen_w as i32, menu_h as i32, state.color_scheme);
-                            if state.render_cache.menubar_glass.as_ref().map(|(w2, h2, s2, _)| (*w2, *h2, *s2)) != Some(menubar_key) {
-                                let blur_data = state.wallpaper.as_ref().and_then(|wp| {
-                                    let (wp_w, wp_h) = wp.size();
-                                    Some((wp.pixels(), wp_w, wp_h, screen_w as i32, screen_h as i32, 0, 0))
-                                });
-                                if let Some(buf) = create_menubar_glass(renderer, screen_w as i32, menu_h as i32, blur_data, state.color_scheme == crate::config::ColorScheme::Dark) {
-                                    state.render_cache.menubar_glass = Some((menubar_key.0, menubar_key.1, menubar_key.2, buf));
-                                }
-                            }
-                            if let Some((_, _, _, ref buf)) = state.render_cache.menubar_glass {
-                                let elem = TextureRenderElement::from_texture_buffer(
-                                    Point::from((0.0f64, 0.0f64)),
-                                    &buf, None, None,
-                                    Some(Size::from((screen_w as i32, menu_h as i32))),
-                                    Kind::Unspecified,
-                                );
-                                all_elements.push(TontooRenderElements::MenuBar(MenuBarElement(elem)));
-                            }
-
-                            // ── Left side: Logo ──
-                            let text_color = if state.color_scheme == crate::config::ColorScheme::Dark {
-                                [255, 255, 255, 255]
-                            } else {
-                                [0, 0, 0, 255]
-                            };
-                            let mut left_x: f32 = 10.0;
-
-                            // TontooOS icon (Tontoo_White.png loaded as texture)
-                            {
-                                let icon_size: f32 = 18.0;
-                                let icon_y = (menu_h - icon_size) / 2.0;
-                                if state.render_cache.tontoo_logo.is_none() {
-                                    let logo_candidates = [
-                                        "/usr/share/icons/Tontoo_White.png",
-                                        "/usr/share/pixmaps/Tontoo_White.png",
-                                        "/opt/TontooOS/Tontoo_White.png",
-                                    ];
-                                    for path in &logo_candidates {
-                                        if let Ok(img_data) = std::fs::read(path) {
-                                            if let Ok(img) = image::load_from_memory(&img_data) {
-                                                let rgba = img.to_rgba8();
-                                                let (iw, ih) = rgba.dimensions();
-                                                if let Some(buf) = TextureBuffer::from_memory(
-                                                    renderer,
-                                                    &rgba,
-                                                    Fourcc::Rgba8888,
-                                                    (iw as i32, ih as i32),
-                                                    false,
-                                                    1,
-                                                    Transform::Normal,
-                                                    None,
-                                                ) {
-                                                    state.render_cache.tontoo_logo = Some(buf);
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if let Some(ref logo_buf) = state.render_cache.tontoo_logo {
-                                    let elem = TextureRenderElement::from_texture_buffer(
-                                        Point::from((left_x as f64, icon_y as f64)),
-                                        logo_buf, None, None,
-                                        Some(Size::from((icon_size as i32, icon_size as i32))),
-                                        Kind::Unspecified,
-                                    );
-                                    all_elements.push(TontooRenderElements::MenuBar(MenuBarElement(elem)));
-                                } else {
-                                    let fallback_color = text_color;
-                                    if let Some(t_buf) = render_text_texture(renderer, "T", 14.0, fallback_color, state.render_cache.font.as_ref()) {
-                                        let elem = TextureRenderElement::from_texture_buffer(
-                                            Point::from((left_x as f64, icon_y as f64)),
-                                            &t_buf, None, None,
-                                            None,
-                                            Kind::Unspecified,
-                                        );
-                                        all_elements.push(TontooRenderElements::MenuBar(MenuBarElement(elem)));
-                                    }
-                                }
-                                left_x += icon_size + 8.0;
-                            }
-
-                            // ── Right side: Clock ──
-                            let now_secs = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs();
-                            let hours = (now_secs / 3600) % 24;
-                            let minutes = (now_secs / 60) % 60;
-                            let clock_text = format!("{:02}:{:02}", hours, minutes);
-                            let clock_w_est = (clock_text.len() as f32 * 13.0 * 0.55) as i32;
-                            if let Some(clock_buf) = render_text_texture(renderer, &clock_text, 13.0, text_color, state.render_cache.font.as_ref()) {
-                                let elem = TextureRenderElement::from_texture_buffer(
-                                    Point::from(((screen_w as i32 - clock_w_est - 16) as f64, 7.0f64)),
-                                    &clock_buf, None, None,
-                                    None,
-                                    Kind::Unspecified,
-                                );
-                                all_elements.push(TontooRenderElements::MenuBar(MenuBarElement(elem)));
-                            }
-                        }
+                        // Top strut: reserved for the external Menubar.app system app.
+                        // The compositor renders nothing here; windows are placed
+                        // below the strut (see handlers/xdg_shell.rs).
 
                         // Cursor rendered ABOVE all content
                         if let Some(e) = widget_cursor {
@@ -734,46 +626,6 @@ fn winit_wallpaper_from_buffer(
         Some(Size::from((scaled_w, scaled_h))),
         Kind::Unspecified,
     )
-}
-
-/// Create a fully transparent menubar texture with wallpaper blur.
-/// Only the blurred wallpaper is shown — no tint, no shadow, no overlay.
-/// The menubar is completely see-through.
-fn create_menubar_glass(
-    renderer: &mut GlesRenderer,
-    w: i32,
-    h: i32,
-    blur_src: Option<(&[u8], i32, i32, i32, i32, i32, i32)>,
-    is_dark: bool,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let wu = w as u32;
-    let hu = h as u32;
-    let mut data = vec![0u8; (wu * hu * 4) as usize];
-
-    if let Some((wp_dat, wp_w, wp_h, sc_w, sc_h, dx, dy)) = blur_src {
-        let fill_scale = (sc_w as f64 / wp_w as f64).max(sc_h as f64 / wp_h as f64);
-        let off_x = ((sc_w as f64 - wp_w as f64 * fill_scale) / 2.0) as f64;
-        let off_y = ((sc_h as f64 - wp_h as f64 * fill_scale) / 2.0) as f64;
-
-        // 3-pass box blur (~15×15 Gaussian)
-        let mut tmp = vec![0u8; (wu * hu * 4) as usize];
-        render_box_blur_5x5(
-            wp_dat, &mut tmp, wu, hu, wp_w as u32, wp_h as u32,
-            (dx as f64 - off_x) as i32, (dy as f64 - off_y) as i32,
-            1.0, 1.0, fill_scale,
-        );
-        let mut tmp2 = vec![0u8; (wu * hu * 4) as usize];
-        render_box_blur_5x5(&tmp, &mut tmp2, wu, hu, wu, hu, 0, 0, 0.0, 0.0, 1.0);
-        render_box_blur_5x5(&tmp2, &mut data, wu, hu, wu, hu, 0, 0, 0.0, 0.0, 1.0);
-
-        // Fully transparent — keep blurred wallpaper pixels as-is, no tint
-        // Alpha stays at 0 (from initialized vec) = completely transparent
-    } else {
-        // No wallpaper: fully transparent (invisible)
-        // data is already all zeros = transparent
-    }
-
-    TextureBuffer::from_memory(renderer, &data, Fourcc::Abgr8888, (w, h), false, 1, Transform::Normal, None).ok()
 }
 
 // ── Dock helpers (duplicated from udev.rs for the winit backend) ──

@@ -31,8 +31,8 @@ Returns `"dark"` or `"light"`.
 pub fn gtk_theme_name(&self) -> &'static str
 ```
 
-Returns the GTK theme name. `Dark` maps to `"MacTahoe-Dark-blue"`, `Light` maps
-to `"MacTahoe-Light-blue"`.
+Returns the GTK theme name. `Dark` maps to `"TontooOS-Dark"`, `Light` maps
+to `"TontooOS-Light"` (aliases of `MacTahoe-Dark-blue`/`MacTahoe-Light-blue` with SF Pro).
 
 ### ColorScheme::prefers_color_scheme
 
@@ -116,11 +116,30 @@ Sets the following environment variables:
 | Variable | Dark | Light |
 |---|---|---|
 | `TONTOO_COLOR_SCHEME` | `dark` | `light` |
-| `GTK_THEME` | `MacTahoe-Dark-blue` | `MacTahoe-Light-blue` |
+| `GTK_THEME` | `TontooOS-Dark` | `TontooOS-Light` |
 | `COLOR_SCHEME` | `prefer-dark` | `prefer-light` |
 | `XCURSOR_THEME` | `MacTahoe-dark-cursors` | `MacTahoe-cursors` |
 | `XCURSOR_SIZE` | `24` | `24` |
 | `TERMINAL` | `foot` | `foot` |
+
+## Traffic Lights And Icon Theme
+
+Window traffic lights are fixed once and never change with the color scheme.
+Only `gtk-theme` and `color-scheme` toggle between dark and light:
+
+| Setting | Value | Where | Switches |
+|---|---|---|---|
+| `button-layout` | `close,minimize,maximize:` | `90_tontoo.gschema.override` (`org.gnome.desktop.wm.preferences`) | Never |
+| `gtk-decoration-layout` | `close,minimize,maximize:` | `settings.ini` (gtk-3.0 and gtk-4.0) | Never |
+| `gtk-theme` | `TontooOS-Dark` / `TontooOS-Light` | `org.gnome.desktop.interface` | On toggle |
+| `color-scheme` | `prefer-dark` / `prefer-light` | `org.gnome.desktop.interface` | On toggle |
+| `icon-theme` | `MacTahoe` | `org.gnome.desktop.interface` | Never |
+| `cursor-theme` | `MacTahoe-dark-cursors` / `MacTahoe-cursors` | `org.gnome.desktop.interface` | On toggle |
+
+> **Note:** Chromium, Firefox and VSCode draw their own decorations
+> (client-side, see [WaylandHandlers.md](WaylandHandlers.md)) and follow the
+> portal `color-scheme`. The fixed MacTahoe traffic lights only define the
+> frame, so the decoration color is irrelevant to them.
 
 ## Constants
 
@@ -128,8 +147,10 @@ Sets the following environment variables:
 pub const TITLEBAR_HEIGHT: i32 = 32;
 ```
 
-The server-side window titlebar height used by the render pipeline and window
-hit testing.
+Legacy server-side titlebar height. Kept for backward compatibility — the
+compositor no longer renders a titlebar (CSD). Apps that draw their own
+header may still reference this value for sizing. See
+[Rendering.md](Rendering.md) and [WaylandHandlers.md](WaylandHandlers.md).
 
 ## Cross References
 

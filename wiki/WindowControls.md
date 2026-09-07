@@ -3,6 +3,13 @@
 The window controls module implements macOS-style traffic light buttons
 (close, minimize, maximize) rendered in the top-left corner of each window.
 
+> **Note (CSD):** Since the compositor now uses Client-Side Decorations,
+> the compositor no longer renders traffic lights or a titlebar itself.
+> `WindowControls` is kept as a **helper library for apps** — apps that want
+> a native macOS look can reuse `DOT_SIZE`, `close_color`, and the pixel
+> generation helpers to draw their own header. The compositor's `Input`
+> and `Rendering` pipelines no longer reference it directly.
+
 ## Constants
 
 | Constant | Value |
@@ -109,7 +116,7 @@ Returns dark semi-transparent RGBA pixels on a transparent background.
 
 ## Cross References
 
-- [Shell.md](Shell.md) -- `ShellState::window_controls` map
-- [Rendering.md](Rendering.md) -- traffic lights are rendered in the
-  titlebar area
-- [Input.md](Input.md) -- traffic light click and hover handling
+- [Shell.md](Shell.md) -- `ShellState::window_controls` map (kept, unused by compositor)
+- [Rendering.md](Rendering.md) -- previously rendered in the titlebar area; now CSD (apps render)
+- [Input.md](Input.md) -- previous traffic light click/hover; now handled by clients
+- [WaylandHandlers.md](WaylandHandlers.md) -- decoration now `ClientSide`

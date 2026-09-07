@@ -67,6 +67,13 @@ sequence is:
 The Wayland socket name is stored in `socket_name` and exported via
 `WAYLAND_DISPLAY` after initialization.
 
+> **Note:** `init_wayland_listener` uses `ListeningSocketSource::new_auto()`
+> which requires `XDG_RUNTIME_DIR`. If the variable is unset (e.g. when
+> started without LaunchPad), the compositor falls back to
+> `dirs::runtime_dir()` or `/run/user/<uid>` (creating it with `0700`) and
+> finally `/tmp/runtime-<uid>`, sets `XDG_RUNTIME_DIR`, and retries. The
+> original `RuntimeDirNotSet` panic is thus avoided; see `src/state.rs:203`.
+
 ### TontooCompositor::surface_under
 
 ```rust

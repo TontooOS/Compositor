@@ -399,6 +399,7 @@ impl Dispatch<protocol::tontoo_ui::tontoo_ui_manager::TontooUiManager, ()>
                 let surface_id = surface.id();
                 let surface_state = state.tontoo_ui.insert_surface(surface_id);
                 surface_state.surface_resource = Some(surface);
+                state.pending_redraw = true;
                 tracing::debug!("tontoo_ui_manager: new surface created");
             }
             protocol::tontoo_ui::tontoo_ui_manager::Request::Pong { serial } => {
@@ -429,15 +430,19 @@ impl Dispatch<protocol::tontoo_ui::tontoo_ui_surface::TontooUiSurface, ()>
             }
             protocol::tontoo_ui::tontoo_ui_surface::Request::SetSize { width, height } => {
                 super::tontoo_ui::handle_set_size(&mut state.tontoo_ui, &surface_id, width, height);
+                state.pending_redraw = true;
             }
             protocol::tontoo_ui::tontoo_ui_surface::Request::SetGlass { milkiness, alpha, sigma } => {
                 super::tontoo_ui::handle_set_glass(&mut state.tontoo_ui, &surface_id, milkiness as f32, alpha as f32, sigma as f32);
+                state.pending_redraw = true;
             }
             protocol::tontoo_ui::tontoo_ui_surface::Request::UpdateWidgetTree { nodes } => {
                 super::tontoo_ui::handle_update_widget_tree(&mut state.tontoo_ui, &surface_id, nodes);
+                state.pending_redraw = true;
             }
             protocol::tontoo_ui::tontoo_ui_surface::Request::SetColorScheme { scheme } => {
                 super::tontoo_ui::handle_set_color_scheme(&mut state.tontoo_ui, &surface_id, scheme);
+                state.pending_redraw = true;
             }
             protocol::tontoo_ui::tontoo_ui_surface::Request::RequestClose => {
                 super::tontoo_ui::handle_request_close(&mut state.tontoo_ui, &surface_id);

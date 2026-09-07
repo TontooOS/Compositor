@@ -52,9 +52,10 @@ fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>)
 ```
 
 Resets cursor visibility, updates the data device focus, and tracks the
-focused surface. Updates the dock `active_app` and menubar `app_name`
-based on the focused window's `app_id` or title. When no window is focused,
-clears the active app and resets the menubar to `"TontooOS"`.
+focused surface. Updates the dock `active_app` based on the focused
+window's `app_id` or title. When no window is focused, clears the active
+app. (The top bar is the external `Menubar.app`; the compositor holds no
+menubar state.)
 
 ## Data Device
 
@@ -79,8 +80,8 @@ fn new_toplevel(&mut self, surface: ToplevelSurface)
 ```
 
 Configures the new toplevel with a default size of 800x500, sends the
-configure, creates a `Window`, maps it at (30, 40) below the menubar, and
-triggers a redraw.
+configure, creates a `Window`, maps it at (30, 40) below the reserved
+top strut for the external `Menubar.app`, and triggers a redraw.
 
 ### new_popup
 
@@ -104,21 +105,26 @@ Unconstrains a popup to the output geometry.
 
 ## XdgDecorationHandler
 
+The compositor now uses **Client-Side Decorations (CSD)**. Each app draws its
+own header bar (traffic lights + title).
+
 ### new_decoration
 
 ```rust
 fn new_decoration(&mut self, toplevel: ToplevelSurface)
 ```
 
-Sets the decoration mode to `ServerSide` with a default size of 800x500.
+Sets the decoration mode to `ClientSide` with a default size of 800x500.
 
 ### request_mode
 
-Honors `ClientSide` requests. All other modes resolve to `ServerSide`.
+Always returns `ClientSide`. Even if a client requests `ServerSide`, the
+compositor forces `ClientSide` — apps must render their own decorations.
 
 ### unset_mode
 
-Clears the decoration mode and sends a configure.
+Sets the decoration mode to `ClientSide` and sends a configure (previously
+cleared the mode).
 
 ## WlrLayerShellHandler
 
@@ -157,6 +163,6 @@ smithay::delegate_layer_shell!(TontooCompositor);
 ## Cross References
 
 - [State.md](State.md) -- handler implementations access `TontooCompositor` state
-- [Grabs.md](Grabs.md) -- move/resize requests create pointer grabs
-- [WindowControls.md](WindowControls.md) -- traffic light clicks send
-  `send_close`, `send_pending_configure`
+- [Grabs.md](Grabs.md) -- move/resize requests create pointer grabs (clients drive move via CSD)
+- [WindowControls.md](WindowControls.md) -- helper for apps (compositor no longer handles `send_close`)
+- [Rendering.md](Rendering.md) -- now CSD, only shadow + border from compositor

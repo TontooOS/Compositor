@@ -25,7 +25,6 @@ use crate::config::ColorScheme;
 
 pub struct WallpaperElement(pub TextureRenderElement<GlesTexture>);
 pub struct CursorTextureElement(pub TextureRenderElement<GlesTexture>);
-pub struct MenuBarElement(pub TextureRenderElement<GlesTexture>);
 pub struct DockBarElement(pub TextureRenderElement<GlesTexture>);
 pub struct WindowShadowElement(pub TextureRenderElement<GlesTexture>);
 pub struct WindowBorderElement(pub TextureRenderElement<GlesTexture>);
@@ -65,30 +64,6 @@ impl Element for CursorTextureElement {
 }
 
 impl RenderElement<GlesRenderer> for CursorTextureElement {
-    fn draw(
-        &self,
-        frame: &mut <GlesRenderer as smithay::backend::renderer::RendererSuper>::Frame<'_, '_>,
-        src: Rectangle<f64, Buffer>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &[Rectangle<i32, Physical>],
-    ) -> Result<(), <GlesRenderer as smithay::backend::renderer::RendererSuper>::Error> {
-        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions)
-    }
-    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
-        self.0.underlying_storage(renderer)
-    }
-}
-
-impl Element for MenuBarElement {
-    fn id(&self) -> &Id { self.0.id() }
-    fn current_commit(&self) -> CommitCounter { self.0.current_commit() }
-    fn src(&self) -> Rectangle<f64, Buffer> { self.0.src() }
-    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> { self.0.geometry(scale) }
-    fn kind(&self) -> Kind { self.0.kind() }
-}
-
-impl RenderElement<GlesRenderer> for MenuBarElement {
     fn draw(
         &self,
         frame: &mut <GlesRenderer as smithay::backend::renderer::RendererSuper>::Frame<'_, '_>,
@@ -254,7 +229,6 @@ smithay::backend::renderer::element::render_elements! {
     pub TontooRenderElements<=GlesRenderer>;
     Space=smithay::desktop::space::SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>,
     Wallpaper=WallpaperElement,
-    MenuBar=MenuBarElement,
     DockBar=DockBarElement,
     CursorTexture=CursorTextureElement,
     CursorSurface=WaylandSurfaceRenderElement<GlesRenderer>,

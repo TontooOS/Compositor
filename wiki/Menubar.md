@@ -1,106 +1,45 @@
 # Menubar
 
-A macOS-style top menu bar rendered as a translucent glass panel spanning the
-full screen width. The left side shows the TontooOS logo icon and the active
-application name. The right side shows system tray icons (Wi-Fi, battery,
-clock). A TontooOS dropdown menu is available via the OS menu button.
+> **Removed.** The compositor no longer renders its own menu bar. The
+> `shell::menubar` module (`Menubar`, `MenubarItem`), the `MenuBar`
+> render element, the menubar glass/logo/clock textures and the menubar
+> clock in the render pump were deleted. The top bar is now the external
+> `Menubar.app` system app.
 
-## Menubar
+## External Menubar.app
 
-```rust
-pub struct Menubar {
-    pub height: f32,
-    pub visible: bool,
-    pub os_menu_active: bool,
-    pub app_name: String,
-    pub show_clock: bool,
-    pub show_wifi: bool,
-    pub show_battery: bool,
-}
-```
+The system menu bar is a standalone TontooOS app built with TBuild from
+`TontooProgramms/Menubar` (`bundle_id` `com.tontoo.menubar`):
 
-Default height is 28.0 logical pixels. `show_clock`, `show_wifi`, and
-`show_battery` are all `true` by default.
+- The ISO build stages it as an extracted bundle at
+  `/System/Applications/Menubar.app` (see `BaseOS/scripts/stage-menubar.sh`).
+- At boot the `menubar` LaunchPad service
+  (`Library/System/Launchpads/menubar.service`, type `sys`) starts it via
+  `/usr/local/bin/start-menubar.sh`, which waits for the compositor
+  Wayland socket and then execs `/usr/bin/tapp
+  /System/Applications/Menubar.app`. It depends on `compositor` and
+  `live-setup` and restarts on crash.
+- On installed systems `install-system.sh` writes a per-user variant of
+  the service (`user: <username>`); the live ISO uses `liveuser`.
+- Language files are staged at `/usr/share/tontoo/menubar/lang/`.
 
-### Menubar::new
+## Reserved Top Strut
 
-```rust
-pub fn new() -> Self
-```
+The compositor renders nothing at the top of the screen. Windows are
+placed below the reserved strut (see
+[WaylandHandlers.md](WaylandHandlers.md)).
 
-Creates the menubar with sensible defaults. `app_name` starts as
-`"TontooOS"`.
-
-### Menubar::set_app_name
+### ShellState::menubar_height
 
 ```rust
-pub fn set_app_name(&mut self, name: &str)
+pub fn menubar_height(&self) -> f32
 ```
 
-Updates the application name shown next to the OS logo.
-
-### Menubar::toggle_os_menu
-
-```rust
-pub fn toggle_os_menu(&mut self)
-```
-
-Toggles the TontooOS dropdown menu open/closed.
-
-## Rendering
-
-### Menubar::to_draw_commands
-
-```rust
-pub fn to_draw_commands(
-    &self,
-    screen_width: f32,
-    color_scheme: ColorScheme,
-) -> Vec<DrawCommand>
-```
-
-Returns an empty vec when `visible` is `false`.
-
-The dark theme uses zero milkiness (near-transparent glass) with white text.
-The light theme uses 0.3 milkiness (milky glass) with dark text.
-
-The draw commands include:
-
-1. Glass panel background.
-2. Left side: TontooOS logo rect + "T" label, app name, "TontooOS" menu
-   button (highlighted when `os_menu_active`).
-3. Right side: clock (HH:MM), battery icon, Wi-Fi icon.
-4. When the OS menu is active: a dropdown menu with items including About,
-   System Preferences, App Store, Force Quit, Sleep, Restart, Shut Down,
-   and Lock Screen. Destructive items are rendered in red.
-
-## MenubarItem
-
-```rust
-pub struct MenubarItem {
-    pub label: String,
-    pub icon: Option<String>,
-}
-```
-
-A helper type for defining individual menu bar entries. Currently used
-structurally but not directly consumed by the render loop.
-
-## Time
-
-The clock displays UTC time in HH:MM format. This is derived from
-`SystemTime::now() - UNIX_EPOCH` using modular arithmetic. The time is not
-converted to the local timezone.
-
-## Text Width Estimation
-
-Text width is estimated as `text.len() * font_size * 0.55`. This is a rough
-approximation sufficient for positioning.
+Returns the reserved top strut in logical pixels (currently 30.0). The
+value is a constant: there is no `Menubar` state left on `ShellState`.
 
 ## Cross References
 
-- [Shell.md](Shell.md) -- `ShellState::menubar` field
-- [Rendering.md](Rendering.md) -- menubar is rendered above windows, below
-  the cursor
-- [Input.md](Input.md) -- `update_traffic_light_hover` and
-  `update_tontoo_ui_hover` are called on pointer motion
+- [Shell.md](Shell.md) -- `ShellState::menubar_height` reserved strut
+- [Rendering.md](Rendering.md) -- no `MenuBar` element in the z-order
+- [WaylandHandlers.md](WaylandHandlers.md) -- windows map below the strut

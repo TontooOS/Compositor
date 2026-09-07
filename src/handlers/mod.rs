@@ -44,7 +44,8 @@ impl SeatHandler for TontooCompositor {
         // Update tracked focused surface
         self.focused_surface = focused.cloned();
 
-        // Update dock active_app and menubar based on focused window
+        // Update dock active_app based on focused window
+        // (the top menubar is an external system app: Menubar.app)
         if let Some(wl_surface) = focused {
             // Find the window with this surface
             if let Some(window) = self.space.elements().find(|w| {
@@ -54,11 +55,9 @@ impl SeatHandler for TontooCompositor {
                     .or_else(|| get_window_title(&window))
                     .unwrap_or_else(|| "TontooOS".to_string());
                 self.shell.dock.set_active_app(&app_name);
-                self.shell.menubar.set_app_name(&app_name);
             }
         } else {
             self.shell.dock.clear_active_app();
-            self.shell.menubar.set_app_name("TontooOS");
         }
     }
 }

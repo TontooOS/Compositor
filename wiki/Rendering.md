@@ -2,7 +2,7 @@
 
 The rendering module implements the GPU compositing pipeline for both the
 winit and udev/DRM backends. It composites the wallpaper, window decorations,
-client windows, tontoo_ui surfaces, dock, menubar, and cursor in the correct
+client windows, tontoo_ui surfaces, dock, and cursor in the correct
 z-order.
 
 ## Winit Backend
@@ -34,17 +34,19 @@ On each `Redraw` event:
 4. Bind the framebuffer.
 5. Build the render element list in z-order:
    - Wallpaper (bottommost)
-   - Window shadows
-   - Client windows (`Space`)
+   - Window shadows (improved 3-layer shadow)
+   - Client windows (`Space`) — CSD: windows include their own header bar
    - Window border + rounded-corner mask
-   - Window titlebar glass + traffic lights + title text
    - TontooUI surfaces
    - Dock glass panel + icons + running-app dots
-   - Menubar glass panel + logo + clock
    - Cursor (topmost)
 6. Submit the frame with damage tracking.
 7. Send frame callbacks to windows and layer surfaces.
 8. Refresh the space and clean up popups.
+
+> **Note:** Server-side titlebar / traffic lights have been removed. The
+> compositor now uses Client-Side Decorations (CSD): each app draws its own
+> decoration bar. See [WaylandHandlers.md](WaylandHandlers.md).
 
 ## Z-Order (Winit)
 
@@ -52,14 +54,16 @@ The winit backend pushes elements bottom-to-top (the renderer composites
 back-to-front):
 
 1. `Wallpaper`
-2. `WindowShadow`
-3. `Space` (client windows)
+2. `WindowShadow` (3-layer shadow with vertical bias)
+3. `Space` (client windows, CSD)
 4. `WindowBorder`
-5. `WindowTitlebar`, `WindowControls`
-6. `TontooUi`
-7. `DockBar`
-8. `MenuBar`
-9. `CursorTexture` / `CursorSurface`
+5. `TontooUi`
+6. `DockBar`
+7. `CursorTexture` / `CursorSurface`
+
+> **Note:** The top bar is not rendered here. It is the external
+> `Menubar.app` system app (see [Menubar.md](Menubar.md)); the compositor
+> only reserves the top strut and windows are placed below it.
 
 ## Z-Order (Udev)
 
@@ -68,64 +72,79 @@ reverse and the cursor is inserted at index 0:
 
 1. `CursorTexture` / `CursorSurface` (index 0, inserted last)
 2. `DockBar`
-3. `MenuBar`
-4. `WindowBorder`
-5. `WindowTitlebar`, `WindowControls`
-6. `Space`
-7. `TontooUi`
-8. `WindowShadow`
-9. `Wallpaper` (pushed last, rendered bottommost)
+3. `WindowBorder`
+4. `Space` (CSD)
+5. `TontooUi`
+6. `WindowShadow`
+7. `Wallpaper` (pushed last, rendered bottommost)
 
 ## Window Decorations
 
-Constants matching macOS Tahoe:
+The compositor now uses **Client-Side Decorations (CSD)**. Only the shadow
+and border are drawn by the compositor; the titlebar/traffic lights are
+drawn by each client. Constants match the improved multi-layer macOS Tahoe
+shadow:
 
 | Constant | Value |
 |---|---|
 | `WINDOW_CORNER_RADIUS` | 10.0 |
-| `WINDOW_SHADOW_OFFSET_Y` | 4.0 |
-| `WINDOW_SHADOW_BLUR` | 20.0 |
-| `WINDOW_SHADOW_BASE_ALPHA_DARK` | 0.35 |
-| `WINDOW_SHADOW_BASE_ALPHA_LIGHT` | 0.20 |
-| `WINDOW_BORDER_WIDTH` | 1.0 |
+| `WINDOW_SHADOW_OFFSET_Y` | 12.0 |
+| `WINDOW_SHADOW_BLUR` | 60.0 (max far layer) |
+| `WINDOW_SHADOW_BASE_ALPHA_DARK` | 0.38 |
+| `WINDOW_SHADOW_BASE_ALPHA_LIGHT` | 0.22 |
+| `WINDOW_BORDER_WIDTH` | 0.7 |
+| `TITLEBAR_HEIGHT` | 32 (kept for backward compat, not rendered) |
 
 ### create_window_shadow_texture
 
 ```rust
-fn create_window_shadow_texture(
+pub fn create_window_shadow_texture(
     renderer: &mut GlesRenderer,
     win_w: i32, win_h: i32,
     color_scheme: ColorScheme,
 ) -> Option<TextureBuffer<GlesTexture>>
 ```
 
-Generates a Gaussian shadow around a rounded rectangle. The shadow extends
-`WINDOW_SHADOW_BLUR + 4` pixels beyond the window edges.
+Generates a high-quality 3-layer Gaussian shadow around a rounded rectangle:
+
+- **tight** (blur 14) — contact/umbra
+- **medium** (blur 30) — main penumbra
+- **far** (blur 60) — soft ambient diffuse
+
+Layers are weighted `0.50 / 0.32 / 0.18` and multiplied by
+`WINDOW_SHADOW_BASE_ALPHA_*`. A vertical bias makes the shadow ~18%
+stronger at the bottom than at the top, matching macOS's key-light model.
+The texture extends 64 px beyond the window on all sides (`pad = 64`) and
+is vertically offset by `WINDOW_SHADOW_OFFSET_Y` (12 px).
 
 ### create_window_border_mask_texture
 
 ```rust
-fn create_window_border_mask_texture(
+pub fn create_window_border_mask_texture(
     renderer: &mut GlesRenderer,
     win_w: i32, win_h: i32,
     color_scheme: ColorScheme,
 ) -> Option<TextureBuffer<GlesTexture>>
 ```
 
-Creates a rounded-corner mask with a 1px border. The background is filled
-with the clear color; the border is semi-transparent black.
+Creates a rounded-corner mask with a 0.7 px border. The background is filled
+with the clear color (`#1d1d1d` dark / `#ececec` light); the border is
+semi-transparent black.
 
 ### create_window_titlebar_texture
 
 ```rust
-fn create_window_titlebar_texture(
+pub fn create_window_titlebar_texture(
     renderer: &mut GlesRenderer,
     win_w: i32,
     color_scheme: ColorScheme,
 ) -> Option<TextureBuffer<GlesTexture>>
 ```
 
-Generates a translucent titlebar with rounded top corners and 65% milkiness.
+> **Deprecated / unused.** The function is kept for backward compatibility
+> but is no longer called by the render pipeline. Apps must draw their own
+> titlebar via CSD. The texture previously generated a solid `#ececec`
+> titlebar with rounded top corners.
 
 ## Glass Effects
 
@@ -145,20 +164,6 @@ tint overlay, anti-aliased rounded corners, and a 2px white border. The
 border alpha is 0.63 (160/255).
 
 When no wallpaper is provided, a solid semi-transparent white is used.
-
-### create_menubar_glass
-
-```rust
-fn create_menubar_glass(
-    renderer: &mut GlesRenderer,
-    w: i32, h: i32,
-    blur_src: Option<(&[u8], i32, i32, i32, i32, i32, i32)>,
-    is_dark: bool,
-) -> Option<TextureBuffer<GlesTexture>>
-```
-
-Creates a fully transparent menubar with 3-pass box blur. The blurred
-wallpaper pixels are shown as-is with no tint.
 
 ### box_blur_5x5
 
@@ -197,7 +202,7 @@ fn render_text_texture(
 ```
 
 Rasterizes text using `fontdue`, returns a GPU texture. Used for window
-titles, menubar clock, and dock icon labels.
+titles on the winit backend.
 
 ## Dock Rendering
 
@@ -212,13 +217,6 @@ color mappings:
 | Notes | `0xFF4CAF50` |
 | Podcasts | `0xFF9C27B0` |
 | Unknown | `0xFF607D8B` |
-
-The TontooOS logo is loaded from one of:
-- `/usr/share/icons/Tontoo_White.png`
-- `/usr/share/pixmaps/Tontoo_White.png`
-- `/opt/TontooOS/Tontoo_White.png`
-
-Falls back to rendering the letter "T" when no image is found.
 
 ## Cross References
 

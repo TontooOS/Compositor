@@ -265,6 +265,24 @@ impl Dock {
         }
     }
 
+    /// Returns `true` while the dock is still visibly moving, i.e. any bounce
+    /// animation is running or a magnification spring has not reached its
+    /// target yet. The render pump uses this to keep ticking at frame rate
+    /// only while an animation actually needs frames.
+    pub fn is_animating(&self) -> bool {
+        if !self.visible {
+            return false;
+        }
+        if self.animation_state.bounce_animations.iter().any(|a| a.is_some()) {
+            return true;
+        }
+        self.animation_state
+            .magnification
+            .iter()
+            .zip(self.animation_state.target_magnification.iter())
+            .any(|(current, target)| (*current - *target).abs() >= 0.001)
+    }
+
     /// Compute the target magnification for each icon based on the mouse
     /// cursor's x-position. Icons closest to the cursor scale up to
     /// [`MAX_MAGNIFICATION`] following a gaussian falloff curve.

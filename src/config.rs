@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+/// Legacy server-side titlebar height. The compositor no longer renders a
+/// titlebar — apps draw their own header via Client-Side Decorations (CSD).
+/// Kept for backward compatibility (apps & cache keys may still reference it).
 pub const TITLEBAR_HEIGHT: i32 = 32;
 
 const CONFIG_DIR: &str = "tontoo";
@@ -29,8 +32,8 @@ impl ColorScheme {
 
     pub fn gtk_theme_name(&self) -> &'static str {
         match self {
-            ColorScheme::Dark => "MacTahoe-Dark-blue",
-            ColorScheme::Light => "MacTahoe-Light-blue",
+            ColorScheme::Dark => "TontooOS-Dark",
+            ColorScheme::Light => "TontooOS-Light",
         }
     }
 

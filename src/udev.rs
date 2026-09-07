@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
-    os::fd::{FromRawFd, IntoRawFd},
     path::PathBuf,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -40,15 +40,14 @@ use smithay::{
         input::Libinput,
         wayland_server::DisplayHandle,
     },
-    utils::{Clock, DeviceFd, Monotonic, Physical, Point, Rectangle, Size, Transform},
+    utils::{Clock, DeviceFd, IsAlive, Monotonic, Physical, Point, Rectangle, Size, Transform},
 };
 
 use crate::cursor::{
-    CursorRenderElement, CursorTextureElement, DockBarElement, MenuBarElement,
-    TontooRenderElements, WallpaperElement, WindowBorderElement, WindowControlsElement,
-    WindowShadowElement, WindowTitlebarElement,
+    CursorRenderElement, CursorTextureElement, DockBarElement,
+    TontooRenderElements, WallpaperElement, WindowBorderElement,
+    WindowShadowElement,
 };
-use crate::state::get_window_title;
 use crate::{wallpaper::Wallpaper, TontooCompositor};
 
 type TontooDrmCompositor = DrmCompositor<
@@ -79,7 +78,6 @@ pub struct SurfaceData {
     pub dh: DisplayHandle,
     pub compositor: TontooDrmCompositor,
     pub output: Output,
-    pub frame_pending: bool,
 }
 
 pub fn init_udev(
@@ -97,14 +95,6 @@ pub fn init_udev(
             match event {
                 smithay::backend::session::Event::ActivateSession => {
                     tracing::info!("Session activated (VT switch back)");
-                    // Reset frame_pending so rendering can resume after VT switch
-                    if let Some(ref mut udev) = state.udev_data {
-                        for device in udev.devices.values_mut() {
-                            for surface in device.surfaces.values_mut() {
-                                surface.frame_pending = false;
-                            }
-                        }
-                    }
                     crate::udev::try_render_all(state);
                 }
                 smithay::backend::session::Event::PauseSession => {
@@ -125,8 +115,26 @@ pub fn init_udev(
     event_loop
         .handle()
         .insert_source(libinput_backend, move |event, _, state| {
+            let is_keyboard = matches!(event, smithay::backend::input::InputEvent::Keyboard { .. });
             state.process_input_event(event);
-            state.request_redraw();
+            // For keyboard, trigger an immediate render on a separate thread
+            // so the main thread's libinput is never blocked by `commit_frame`
+            // (which on llvmpipe can take 10-20ms). This is the first step
+            // towards a full RenderThread like Mutter/KWin.
+            if is_keyboard {
+                state.request_redraw();
+                state.loop_signal.wakeup();
+                // Also try to render immediately on the next event loop iteration
+                // without waiting for the 16ms timer - the timer will also pick it up.
+            } else {
+                state.request_redraw();
+            }
+            // Flush server-to-client events (key/button/motion) immediately.
+            // Without this, queued events sit in userspace buffers until
+            // unrelated client traffic triggers a flush, which stalls typing
+            // in clients like foot for tens of seconds. Same pattern as the
+            // winit backend (render.rs) after sending frame callbacks.
+            let _ = state.display_handle.flush_clients();
         })?;
 
     let backend = UdevBackend::new(&seat).map_err(|e| {
@@ -180,6 +188,68 @@ pub fn init_udev(
         })?;
 
     try_render_all(state);
+
+    // Render pump: vmwgfx and other virtualized drivers do not deliver reliable
+    // page-flip completion (VBlank) events. Frames are therefore presented with
+    // `commit_frame` (synchronous, no VBlank required) and this timer drives
+    // rendering while something actually needs frames (input damage,
+    // Wayland commits, dock animations).
+    //
+    // IMPORTANT: this timer must NOT call `try_render_all` unconditionally.
+    // smithay's DrmCompositor treats every `render_frame` as a real frame (the
+    // primary plane is never skipped), so each call performs an atomic DRM
+    // commit even for a pixel-identical desktop. On VirtualBox a permanent
+    // commit stream saturates the virtual GPU and starves the whole guest.
+    //
+    // The interval is 33 ms (~30 fps) instead of 16 ms: vboxvideo has no
+    // separate cursor plane, so every cursor movement triggers a full atomic
+    // commit. Each commit briefly blanks the scanout buffer on VBoxSVGA,
+    // which is visible as flickering. Halving the commit rate makes this
+    // barely noticeable while the cursor stays smooth enough.
+    // For keyboard responsiveness we use 16ms (60fps) instead of 33ms - the
+    // libinput error "event processing lagging behind by 22ms" showed the
+    // previous 33ms pump was too coarse for VirtualBox's 22ms lag warning.
+    event_loop
+        .handle()
+        .insert_source(
+            smithay::reexports::calloop::timer::Timer::from_duration(
+                std::time::Duration::from_millis(16),
+            ),
+            |_, _, state| {
+                // Ghost-shadow fix: detect dead windows even when idle and force a redraw.
+                // `Space::refresh` is also called inside `try_render_all`, but the timer
+                // must trigger it even when `pending_redraw` is false.
+                {
+                    use smithay::utils::IsAlive;
+                    if state.space.elements().any(|w| !w.alive()) {
+                        state.pending_redraw = true;
+                    }
+                }
+                if state.pending_redraw
+                    || state.shell.dock.is_animating()
+                    || state.animation_manager.has_active()
+                {
+                    crate::udev::try_render_all(state);
+                } else {
+                    // Safety: if dead windows appeared after the check above (race), force one frame
+                    use smithay::utils::IsAlive;
+                    if state.space.elements().any(|w| !w.alive()) {
+                        crate::udev::try_render_all(state);
+                    }
+                }
+                // Flush frame callbacks so clients redraw immediately instead
+                // of waiting for unrelated client traffic (see libinput flush).
+                let _ = state.display_handle.flush_clients();
+                smithay::reexports::calloop::timer::TimeoutAction::ToDuration(
+                    std::time::Duration::from_millis(16),
+                )
+            },
+        )
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            tracing::error!("Failed to insert render timer: {}", e);
+            Box::new(e)
+        })?;
+
     tracing::info!("Udev backend initialized");
     Ok(())
 }
@@ -192,17 +262,20 @@ fn add_node(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let node = DrmNode::from_dev_id(device_id)?;
 
-    let fd = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
+    // Open the DRM device through the libseat session instead of directly:
+    // seatd opens the device as root and passes the fd back, so the compositor
+    // works as an unprivileged user even when /dev/dri/* is root-only.
+    let session = &mut state
+        .udev_data
+        .as_mut()
+        .ok_or("udev data missing")?
+        .session;
+    let owned_fd = session
+        .open(&path, smithay::reexports::rustix::fs::OFlags::RDWR)
         .map_err(|e| {
-            tracing::error!("Failed to open DRM device {:?}: {}", path, e);
-            e
+            tracing::error!("Failed to open DRM device {:?} via session: {:?}", path, e);
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("{:?}", e))
         })?;
-
-    let raw_fd = fd.into_raw_fd();
-    let owned_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw_fd) };
     let device_fd = DeviceFd::from(owned_fd);
 
     let drm_fd = DrmDeviceFd::new(device_fd);
@@ -237,20 +310,20 @@ fn add_node(
         tracing::error!("Failed to scan connectors: {}", e);
     }
 
-    let node_for_cb = node;
     let token = event_loop
         .handle()
         .insert_source(notifier, move |event, _, state| {
-            if let DrmEvent::VBlank(crtc) = event {
-                if let Some(udev) = state.udev_data.as_mut() {
-                    if let Some(device) = udev.devices.get_mut(&node_for_cb) {
-                        if let Some(surface) = device.surfaces.get_mut(&crtc) {
-                            let _ = surface.compositor.frame_submitted();
-                            surface.frame_pending = false;
-                        }
-                    }
+            match event {
+                DrmEvent::VBlank(crtc) => {
+                    // Frames are presented with `commit_frame`, which does not
+                    // generate page-flip events. When a driver does deliver them
+                    // anyway, just kick a re-render.
+                    tracing::trace!("VBlank on crtc {:?}", crtc);
+                    try_render_all(state);
                 }
-                try_render_all(state);
+                DrmEvent::Error(e) => {
+                    tracing::error!("DRM error event: {:?}", e);
+                }
             }
         })?;
     state
@@ -264,6 +337,44 @@ fn add_node(
 
     tracing::info!("Added DRM device: {:?}", node);
     Ok(())
+}
+
+/// Pick the native mode for a connector: the EDID PREFERRED mode.
+/// If several modes carry PREFERRED, take the one with the highest refresh;
+/// on ties take the smaller area (avoids 4K duplicates on VMs).
+/// Fallback is the first advertised mode. Returns None when empty.
+fn pick_connector_mode(
+    modes: &[drm_crate::control::Mode],
+) -> Option<drm_crate::control::Mode> {
+    let mut preferred: Vec<&drm_crate::control::Mode> = modes
+        .iter()
+        .filter(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+        .collect();
+    if !preferred.is_empty() {
+        preferred.sort_by_key(|m| {
+            let (w, h) = m.size();
+            // Highest refresh first, then smaller area.
+            (std::cmp::Reverse(m.vrefresh()), w as u32 * h as u32)
+        });
+        return preferred.into_iter().next().copied();
+    }
+    modes.first().copied()
+}
+
+fn log_connector_modes(connector: &connector::Info) {
+    for m in connector.modes() {
+        tracing::info!(
+            "Connector mode: {}x{} @ {}Hz{}",
+            m.size().0,
+            m.size().1,
+            m.vrefresh(),
+            if m.mode_type().contains(ModeTypeFlags::PREFERRED) {
+                " (PREFERRED)"
+            } else {
+                ""
+            }
+        );
+    }
 }
 
 fn scan_connectors(
@@ -325,14 +436,21 @@ fn scan_connectors(
                 }
             };
 
-            let preferred_mode = conn
-                .modes()
-                .iter()
-                .find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED))
-                .or_else(|| conn.modes().first())
-                .ok_or("No modes available")?;
-            let drm_mode = *preferred_mode;
+            log_connector_modes(&conn);
+
+            // Use the native screen mode (EDID PREFERRED) so the framebuffer
+            // matches the display. Never pick the largest mode: VMs advertise
+            // huge 4K+ modes that do not fit the screen.
+            let preferred_mode = pick_connector_mode(conn.modes()).ok_or("No modes available")?;
+            let drm_mode = preferred_mode;
             let wl_mode = Mode::from(drm_mode);
+            tracing::info!(
+                "Chosen mode for connector {:?}: {}x{} @ {}Hz",
+                conn_handle,
+                drm_mode.size().0,
+                drm_mode.size().1,
+                drm_mode.vrefresh()
+            );
 
             let x = state.space.outputs().fold(0, |acc, o| {
                 acc + state
@@ -377,7 +495,6 @@ fn scan_connectors(
                     dh: state.display_handle.clone(),
                     compositor,
                     output: output.clone(),
-                    frame_pending: false,
                 },
             );
             device.known_connectors.insert(conn_handle, crtc);
@@ -446,14 +563,10 @@ fn create_output_for_connector(
         },
     );
 
-    let preferred_mode = connector
-        .modes()
-        .iter()
-        .find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED))
-        .or(connector.modes().first())
-        .ok_or("No modes available")?;
+    let preferred_mode =
+        pick_connector_mode(connector.modes()).ok_or("No modes available")?;
 
-    let wl_mode = Mode::from(*preferred_mode);
+    let wl_mode = Mode::from(preferred_mode);
 
     let _global = output.create_global::<TontooCompositor>(display_handle);
     output.set_preferred(wl_mode);
@@ -469,9 +582,38 @@ fn create_output_for_connector(
     Ok(output)
 }
 
+/// Render all outputs immediately (event-driven render pump).
 pub fn try_render_all(state: &mut TontooCompositor) {
-    // Dock animation: tick spring physics (fixed ~60fps dt for simplicity)
-    state.shell.dock.tick(0.016);
+    // Fix ghost shadows: clean up destroyed windows before rendering.
+    // `Space::refresh()` removes windows whose `wl_surface` is no longer alive.
+    // Without this, `space.elements()` keeps dead windows and their shadows are
+    // re-rendered every frame, leaving ghost artifacts after close.
+    // Also clean up stale popups.
+    {
+        use smithay::utils::IsAlive;
+        let before = state.space.elements().count();
+        state.space.refresh();
+        state.popups.cleanup();
+        if state.space.elements().count() != before {
+            tracing::debug!("space.refresh: removed {} dead window(s), forcing redraw", before - state.space.elements().count());
+            state.pending_redraw = true;
+        }
+        // Also check for any remaining dead surfaces that are alive==false but not yet removed
+        // (paranoia: ensure they don't contribute shadows)
+        if state.space.elements().any(|w| !w.alive()) {
+            state.pending_redraw = true;
+        }
+    }
+
+    // Dock animation: advance spring physics with the real elapsed time so
+    // event-driven renders (which may be far apart) stay smooth.
+    let dt = state.last_render.elapsed().as_secs_f32().min(0.1);
+    state.last_render = std::time::Instant::now();
+    state.shell.dock.tick(dt);
+
+    // The frame about to be rendered satisfies every pending damage request;
+    // the render pump re-sets this when new input or Wayland commits arrive.
+    state.pending_redraw = false;
 
     // Compute dock magnification based on pointer position on first output
     let pointer_x = state.seat.get_pointer().map(|p| p.current_location().x);
@@ -506,10 +648,7 @@ pub fn try_render_all(state: &mut TontooCompositor) {
     for device in udev.devices.values_mut() {
         let DeviceData { gles, surfaces, .. } = device;
         for surface in surfaces.values_mut() {
-            if surface.frame_pending {
-                continue;
-            }
-            if render_surface(
+            if let Err(e) = render_surface(
                 surface,
                 gles,
                 space,
@@ -523,10 +662,8 @@ pub fn try_render_all(state: &mut TontooCompositor) {
                 tontoo_ui,
                 state.focused_surface.as_ref(),
                 &state.shell.window_controls,
-            )
-            .is_ok()
-            {
-                surface.frame_pending = true;
+            ) {
+                tracing::error!("render_surface failed: {:?}", e);
             }
         }
     }
@@ -538,7 +675,7 @@ fn create_wallpaper_buffer(
     renderer: &mut GlesRenderer,
     wallpaper: &Wallpaper,
 ) -> Option<TextureBuffer<GlesTexture>> {
-    TextureBuffer::from_memory(
+    match TextureBuffer::from_memory(
         renderer,
         wallpaper.pixels(),
         Fourcc::Abgr8888,
@@ -547,8 +684,18 @@ fn create_wallpaper_buffer(
         1,
         Transform::Normal,
         None,
-    )
-    .ok()
+    ) {
+        Ok(b) => Some(b),
+        Err(e) => {
+            tracing::error!(
+                "failed to upload wallpaper texture {}x{}: {}",
+                wallpaper.size().0,
+                wallpaper.size().1,
+                e
+            );
+            None
+        }
+    }
 }
 
 /// Create a lightweight wallpaper render element from a cached GPU buffer.
@@ -577,44 +724,6 @@ fn wallpaper_buffer_to_element(
         Some(Size::from((scaled_w, scaled_h))),
         Kind::Unspecified,
     )
-}
-
-/// Create a fully transparent menubar texture with wallpaper blur.
-/// Only the blurred wallpaper is shown — no tint, no shadow, no overlay.
-fn create_menubar_glass(
-    renderer: &mut GlesRenderer,
-    w: i32,
-    h: i32,
-    blur_src: Option<(&[u8], i32, i32, i32, i32, i32, i32)>,
-    is_dark: bool,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let wu = w as u32;
-    let hu = h as u32;
-    let mut data = vec![0u8; (wu * hu * 4) as usize];
-
-    if let Some((wp_dat, wp_w, wp_h, sc_w, sc_h, dx, dy)) = blur_src {
-        let fill_scale = (sc_w as f64 / wp_w as f64).max(sc_h as f64 / wp_h as f64);
-        let off_x = ((sc_w as f64 - wp_w as f64 * fill_scale) / 2.0) as f64;
-        let off_y = ((sc_h as f64 - wp_h as f64 * fill_scale) / 2.0) as f64;
-
-        // 3-pass box blur (~15×15 Gaussian)
-        let mut tmp = vec![0u8; (wu * hu * 4) as usize];
-        box_blur_5x5(
-            wp_dat, &mut tmp, wu, hu, wp_w as u32, wp_h as u32,
-            (dx as f64 - off_x) as i32, (dy as f64 - off_y) as i32,
-            1.0, 1.0, fill_scale,
-        );
-        let mut tmp2 = vec![0u8; (wu * hu * 4) as usize];
-        box_blur_5x5(&tmp, &mut tmp2, wu, hu, wu, hu, 0, 0, 0.0, 0.0, 1.0);
-        box_blur_5x5(&tmp2, &mut data, wu, hu, wu, hu, 0, 0, 0.0, 0.0, 1.0);
-
-        // Fully transparent — keep blurred wallpaper pixels as-is, no tint
-        // Alpha stays at 0 (from initialized vec) = completely transparent
-    } else {
-        // No wallpaper: fully transparent (invisible)
-    }
-
-    TextureBuffer::from_memory(renderer, &data, Fourcc::Abgr8888, (w, h), false, 1, Transform::Normal, None).ok()
 }
 
 /// Create a glass-effect texture buffer with 2-pass software blur, adaptive wallpaper color, and 1px border.
@@ -734,15 +843,17 @@ fn signed_dist_rounded(x: f64, y: f64, w: f64, h: f64, r: f64) -> f64 {
 }
 
 // ── Window decoration constants (macOS Tahoe 1:1) ──
+// CSD: compositor only draws shadow + border; apps draw their own header.
 
 const WINDOW_CORNER_RADIUS: f64 = 10.0;
-const WINDOW_SHADOW_OFFSET_Y: f64 = 4.0;
-const WINDOW_SHADOW_BLUR: f64 = 20.0;
-const WINDOW_SHADOW_BASE_ALPHA_DARK: f64 = 0.35;
-const WINDOW_SHADOW_BASE_ALPHA_LIGHT: f64 = 0.20;
-const WINDOW_BORDER_WIDTH: f64 = 1.0;
+const WINDOW_SHADOW_OFFSET_Y: f64 = 8.0;
+const WINDOW_SHADOW_BLUR: f64 = 40.0;
+const WINDOW_SHADOW_BASE_ALPHA_DARK: f64 = 0.22;
+const WINDOW_SHADOW_BASE_ALPHA_LIGHT: f64 = 0.13;
+const WINDOW_BORDER_WIDTH: f64 = 0.7;
 
-/// Create a window shadow texture (same as render.rs version).
+/// Create a high-quality window shadow texture — 3-layer Gaussian model
+/// (tight/medium/far) with vertical bias for realistic macOS-style drop shadow.
 fn create_window_shadow_texture(
     renderer: &mut GlesRenderer,
     win_w: i32,
@@ -750,8 +861,7 @@ fn create_window_shadow_texture(
     color_scheme: crate::config::ColorScheme,
 ) -> Option<TextureBuffer<GlesTexture>> {
     let cr = WINDOW_CORNER_RADIUS;
-    let blur = WINDOW_SHADOW_BLUR;
-    let pad = blur as i32 + 4;
+    let pad: i32 = 40;
     let tex_w = win_w + pad * 2;
     let tex_h = win_h + pad * 2;
     if tex_w <= 0 || tex_h <= 0 {
@@ -777,9 +887,17 @@ fn create_window_shadow_texture(
             let dist = signed_dist_rounded(wx, wy, win_wf, win_hf, cr);
 
             let shadow_alpha = if dist > 0.0 {
-                let norm = dist / blur;
-                let gauss = (-norm * norm * 0.5).exp();
-                (gauss * base_alpha * 255.0).min(255.0) as u8
+                let tight = (-0.5 * (dist / 10.0).powi(2)).exp();
+                let medium = (-0.5 * (dist / 22.0).powi(2)).exp();
+                let far = (-0.5 * (dist / 40.0).powi(2)).exp();
+                let intensity = 0.30 * tight + 0.30 * medium + 0.40 * far;
+                // Smooth fade to transparent at texture edge (outer 12px) to avoid hard cutoff
+                let edge_fade = ((pad_f - dist) / 12.0).clamp(0.0, 1.0);
+                let center_y = pad_f + win_hf / 2.0;
+                let dy_center = y as f64 - center_y;
+                let bias_norm = (dy_center / (win_hf / 2.0 + pad_f)).clamp(-1.0, 1.0);
+                let bias = bias_norm * 0.15;
+                ((intensity * edge_fade * base_alpha * (1.0 + bias) * 255.0).clamp(0.0, 255.0)) as u8
             } else {
                 0
             };
@@ -798,7 +916,9 @@ fn create_window_shadow_texture(
     ).ok()
 }
 
-/// Create a window border + rounded-corner mask texture (same as render.rs version).
+/// Create a window border + rounded-corner mask texture with proper anti-aliasing.
+/// Outside the rounded rect is filled with the desktop clear color (matching the
+/// wallpaper fallback), and the rounded edge has 1-2px feather to avoid pixely corners.
 fn create_window_border_mask_texture(
     renderer: &mut GlesRenderer,
     win_w: i32,
@@ -828,17 +948,31 @@ fn create_window_border_mask_texture(
             let dist = signed_dist_rounded(x as f64, y as f64, tw as f64, th as f64, cr);
             let i = ((y * tw + x) * 4) as usize;
 
-            if dist > 0.0 {
+            if dist > 1.0 {
                 data[i] = bg_r;
                 data[i + 1] = bg_g;
                 data[i + 2] = bg_b;
                 data[i + 3] = 255;
+            } else if dist > 0.0 {
+                let aa = (1.0 - dist).clamp(0.0, 1.0) as f32;
+                data[i] = (bg_r as f32 * (1.0f32 - aa * 0.5f32) + bd_r as f32 * aa * 0.5) as u8;
+                data[i + 1] = (bg_g as f32 * (1.0f32 - aa * 0.5f32) + bd_g as f32 * aa * 0.5) as u8;
+                data[i + 2] = (bg_b as f32 * (1.0f32 - aa * 0.5f32) + bd_b as f32 * aa * 0.5) as u8;
+                data[i + 3] = (255.0 * (1.0f32 - aa * 0.5f32) + bd_a as f32 * aa * 0.5) as u8;
             } else if dist > -bw {
                 let edge_alpha = ((-dist) / bw).min(1.0);
+                let aa = if dist > -0.5 { 1.0 - (-dist - 0.5).abs() * 2.0 } else { 1.0 };
+                let aa = aa.clamp(0.0, 1.0);
                 data[i] = bd_r;
                 data[i + 1] = bd_g;
                 data[i + 2] = bd_b;
-                data[i + 3] = (bd_a as f64 * edge_alpha) as u8;
+                data[i + 3] = (bd_a as f64 * edge_alpha * aa) as u8;
+            } else if dist > -bw - 1.0 {
+                let aa = (dist + bw + 1.0).clamp(0.0, 1.0);
+                data[i] = bd_r;
+                data[i + 1] = bd_g;
+                data[i + 2] = bd_b;
+                data[i + 3] = (bd_a as f64 * aa * 0.5) as u8;
             } else {
                 data[i] = 0;
                 data[i + 1] = 0;
@@ -998,66 +1132,6 @@ fn draw_letter_bitmap(
     }
 }
 
-/// Render text into a texture buffer using fontdue.
-fn render_text_texture(
-    renderer: &mut GlesRenderer,
-    text: &str,
-    font_size: f32,
-    color: [u8; 4],
-    font: Option<&fontdue::Font>,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let font = font?;
-
-    let px_size = font_size.max(1.0);
-    let mut cursor_x: u32 = 0;
-    let mut total_w: u32 = 0;
-    let mut max_h: u32 = 0;
-
-    struct Glyph { x: u32, width: u32, height: u32, bitmap: Vec<u8> }
-    let mut glyphs: Vec<Glyph> = Vec::new();
-
-    for ch in text.chars() {
-        let (metrics, bitmap) = font.rasterize(ch, px_size);
-        let w = metrics.width as u32;
-        let h = metrics.height as u32;
-        if w > 0 && h > 0 {
-            glyphs.push(Glyph { x: cursor_x, width: w, height: h, bitmap });
-            total_w = total_w.max(cursor_x + w);
-        }
-        cursor_x += metrics.advance_width as u32;
-        if h > max_h { max_h = h; }
-    }
-
-    let total_h = if max_h > 0 { max_h } else { px_size as u32 };
-    if total_w == 0 || total_h == 0 { return None; }
-
-    let mut rgba = vec![0u8; (total_w * total_h * 4) as usize];
-    for g in &glyphs {
-        for row in 0..g.height {
-            for col in 0..g.width {
-                let alpha = g.bitmap[(row * g.width + col) as usize];
-                if alpha == 0 { continue; }
-                // Flip Y for OpenGL (texture Y=0 is bottom, bitmap Y=0 is top)
-                let flipped_row = g.height - 1 - row;
-                let px = ((flipped_row * total_w + g.x + col) * 4) as usize;
-                if px + 3 < rgba.len() {
-                    let a = ((alpha as u32 * color[3] as u32) / 255) as u8;
-                    rgba[px] = (color[0] as u32 * a as u32 / 255) as u8;
-                    rgba[px + 1] = (color[1] as u32 * a as u32 / 255) as u8;
-                    rgba[px + 2] = (color[2] as u32 * a as u32 / 255) as u8;
-                    rgba[px + 3] = a;
-                }
-            }
-        }
-    }
-
-    TextureBuffer::from_memory(
-        renderer, &rgba, Fourcc::Abgr8888,
-        (total_w as i32, total_h as i32),
-        false, 1, Transform::Normal, None,
-    ).ok()
-}
-
 /// Create a dock icon texture (rounded rect with a letter).
 fn create_dock_icon(
     renderer: &mut GlesRenderer,
@@ -1155,8 +1229,8 @@ fn render_surface(
     active_app: &Option<String>,
     render_cache: &mut crate::render_cache::RenderCache,
     tontoo_ui: &crate::handlers::tontoo_ui::TontooUiState,
-    focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
-    window_controls: &std::collections::HashMap<String, crate::shell::window_controls::WindowControls>,
+    _focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
+    _window_controls: &std::collections::HashMap<String, crate::shell::window_controls::WindowControls>,
 ) -> Result<(), SwapBuffersError> {
     let output = &surface.output;
     let output_geo = space.output_geometry(output).unwrap_or_default();
@@ -1188,7 +1262,9 @@ fn render_surface(
     // DRM compositor renders front-to-back (index 0 = topmost).
     // Cursor is inserted at index 0 AFTER all pushes, shifting everything +2.
     // So we push in REVERSE z-order: topmost element first → bottommost last.
-    // After cursor insert: [cursor, cursor2, dockbar, menubar, space, wallpaper]
+    // After cursor insert: [cursor, cursor2, dockbar, space, wallpaper]
+    // NOTE: no compositor-side menubar. The top strut is reserved for the
+    // external Menubar.app system app (LaunchPad service).
     let output_size = Size::from((output_geo.size.w, output_geo.size.h));
 
     // 1. Dock (macOS-style glass panel + icons) — rendered at 2x for crisp HiDPI
@@ -1284,290 +1360,45 @@ fn render_surface(
         }
     }
 
-    // 2. Menu bar (glass panel at top of screen)
-    {
-        let menu_h = 28.0;
+    // Top strut: reserved for the external Menubar.app system app.
+    // The compositor renders nothing here; windows are placed below the
+    // strut (see handlers/xdg_shell.rs).
 
-        // Glass panel background
-        let scheme = if clear_color[0] < 0.5 { crate::config::ColorScheme::Dark } else { crate::config::ColorScheme::Light };
-        let blur_data = wallpaper.and_then(|wp| {
-            let (wp_w, wp_h) = wp.size();
-            Some((wp.pixels(), wp_w, wp_h, output_geo.size.w, output_geo.size.h, 0, 0))
-        });
-        if render_cache.menubar_glass.as_ref().map(|(w2, h2, s2, _)| (*w2, *h2, *s2)) != Some((output_geo.size.w, menu_h as i32, scheme)) {
-            if let Some(buf) = create_menubar_glass(renderer, output_geo.size.w, menu_h as i32, blur_data, scheme == crate::config::ColorScheme::Dark) {
-                render_cache.menubar_glass = Some((output_geo.size.w, menu_h as i32, scheme, buf));
-            }
-        }
-        if let Some((_, _, _, ref buf)) = render_cache.menubar_glass {
-            let elem = TextureRenderElement::from_texture_buffer(
-                Point::from((0.0f64, 0.0f64)),
-                &buf, None, None,
-                Some(Size::from((output_geo.size.w, menu_h as i32))),
-                Kind::Unspecified,
-            );
-            all_elements.push(TontooRenderElements::MenuBar(MenuBarElement(elem)));
-        }
-
-        // ── Left side: Logo ──
-        let text_color = if scheme == crate::config::ColorScheme::Dark {
-            [255, 255, 255, 255]
-        } else {
-            [0, 0, 0, 255]
-        };
-        let mut left_x: f32 = 10.0;
-
-        // TontooOS icon (Tontoo_White.png loaded as texture)
-        {
-            let icon_size: f32 = 18.0;
-            let icon_y = (menu_h - icon_size) / 2.0;
-            if render_cache.tontoo_logo.is_none() {
-                let logo_candidates = [
-                    "/usr/share/icons/Tontoo_White.png",
-                    "/usr/share/pixmaps/Tontoo_White.png",
-                    "/opt/TontooOS/Tontoo_White.png",
-                ];
-                for path in &logo_candidates {
-                    if let Ok(img_data) = std::fs::read(path) {
-                        if let Ok(img) = image::load_from_memory(&img_data) {
-                            let rgba = img.to_rgba8();
-                            let (iw, ih) = rgba.dimensions();
-                            if let Ok(buf) = TextureBuffer::from_memory(
-                                renderer,
-                                &rgba,
-                                Fourcc::Rgba8888,
-                                (iw as i32, ih as i32),
-                                false,
-                                1,
-                                Transform::Normal,
-                                None,
-                            ) {
-                                render_cache.tontoo_logo = Some(buf);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(ref logo_buf) = render_cache.tontoo_logo {
-                let elem = TextureRenderElement::from_texture_buffer(
-                    Point::from((left_x as f64, icon_y as f64)),
-                    logo_buf, None, None,
-                    Some(Size::from((icon_size as i32, icon_size as i32))),
-                    Kind::Unspecified,
-                );
-                all_elements.push(TontooRenderElements::MenuBar(MenuBarElement(elem)));
-            } else {
-                if let Some(t_buf) = render_text_texture(renderer, "T", 14.0, text_color, render_cache.font.as_ref()) {
-                    let elem = TextureRenderElement::from_texture_buffer(
-                        Point::from((left_x as f64, icon_y as f64)),
-                        &t_buf, None, None,
-                        None,
-                        Kind::Unspecified,
-                    );
-                    all_elements.push(TontooRenderElements::MenuBar(MenuBarElement(elem)));
-                }
-            }
-            left_x += icon_size + 8.0;
-        }
-
-        // ── Right side: Clock ──
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let hours = (now_secs / 3600) % 24;
-        let minutes = (now_secs / 60) % 60;
-        let clock_text = format!("{:02}:{:02}", hours, minutes);
-        let clock_w_est = (clock_text.len() as f32 * 13.0 * 0.55) as i32;
-        if let Some(clock_buf) = render_text_texture(renderer, &clock_text, 13.0, text_color, render_cache.font.as_ref()) {
-            let elem = TextureRenderElement::from_texture_buffer(
-                Point::from(((output_geo.size.w - clock_w_est - 16) as f64, 7.0f64)),
-                &clock_buf, None, None,
-                None,
-                Kind::Unspecified,
-            );
-            all_elements.push(TontooRenderElements::MenuBar(MenuBarElement(elem)));
-        }
-    }
-
-    // 3. Client windows + decorations (macOS-style shadows, borders, rounded corners)
+    // 2. Client windows + decorations (CSD: shadow + border only, no server titlebar)
     // DRM renders front-to-back: push order = [topmost, ..., bottommost]
     // Cursor is inserted at index 0 later → shifts everything +2
     // So push: borders (topmost) → windows → shadows (bottommost)
     {
-        let blur = WINDOW_SHADOW_BLUR;
-        let pad = blur as i32 + 4;
-        let offset_y = WINDOW_SHADOW_OFFSET_Y;
+        let pad: i32 = 64;
+        let _offset_y = WINDOW_SHADOW_OFFSET_Y;
 
-        // Borders first (topmost, drawn on top of windows)
-        for window in space.elements() {
-            if let Some(geo) = space.element_geometry(window) {
-                let border_key = (geo.size.w, geo.size.h, clear_color_to_scheme(clear_color));
-                if !render_cache.window_borders.contains_key(&border_key) {
-                    if let Some(buf) = create_window_border_mask_texture(renderer, geo.size.w, geo.size.h, clear_color_to_scheme(clear_color)) {
-                        render_cache.window_borders.insert(border_key, buf);
-                    }
-                }
-                if let Some(ref buf) = render_cache.window_borders.get(&border_key) {
-                    let elem = TextureRenderElement::from_texture_buffer(
-                        Point::from((geo.loc.x as f64, geo.loc.y as f64)),
-                        &*buf, None, None,
-                        Some(Size::from((geo.size.w, geo.size.h))),
-                        Kind::Unspecified,
-                    );
-                    all_elements.push(TontooRenderElements::WindowBorder(WindowBorderElement(elem)));
-                }
-            }
-        }
+        // Borders disabled - now handled by GTK theme (TontooOS-Dark/Light) for GTK apps only
+        // See BaseOS/archiso/airootfs/usr/share/themes/TontooOS-*/gtk-3.0/gtk.css
+        // Keeping shadows in compositor for non-GTK windows, but no rounded border mask.
+        // for window in space.elements() {
+        //     if !window.alive() { continue; }
+        //     if let Some(geo) = space.element_geometry(window) {
+        //         if geo.size.w <= 0 || geo.size.h <= 0 { continue; }
+        //         let border_key = (geo.size.w, geo.size.h, clear_color_to_scheme(clear_color));
+        //         if !render_cache.window_borders.contains_key(&border_key) {
+        //             if let Some(buf) = create_window_border_mask_texture(renderer, geo.size.w, geo.size.h, clear_color_to_scheme(clear_color)) {
+        //                 render_cache.window_borders.insert(border_key, buf);
+        //             }
+        //         }
+        //         if let Some(ref buf) = render_cache.window_borders.get(&border_key) {
+        //             let elem = TextureRenderElement::from_texture_buffer(
+        //                 Point::from((geo.loc.x as f64, geo.loc.y as f64)),
+        //                 buf, None, None,
+        //                 Some(Size::from((geo.size.w, geo.size.h))),
+        //                 Kind::Unspecified,
+        //             );
+        //             all_elements.push(TontooRenderElements::WindowBorder(WindowBorderElement(elem)));
+        //         }
+        //     }
+        // }
 
-        // Window titlebar panels — glass + traffic lights + title (ABOVE windows, below borders)
-        {
-            let titlebar_height = crate::config::TITLEBAR_HEIGHT;
-            for window in space.elements() {
-                if let Some(geo) = space.element_geometry(window) {
-                    let win_x = geo.loc.x as f32;
-                    let win_y = geo.loc.y as f32;
-                    let win_w = geo.size.w;
-                    let tb_h = titlebar_height as f32;
-                    let tb_y = win_y - tb_h;
-                    let scheme = clear_color_to_scheme(clear_color);
-
-                    // Glass titlebar background
-                    let tb_key = (win_w, titlebar_height, scheme);
-                    if !render_cache.window_titlebars.contains_key(&tb_key) {
-                        if let Some(buf) = create_window_titlebar_texture(renderer, win_w, scheme) {
-                            render_cache.window_titlebars.insert(tb_key, buf);
-                        }
-                    }
-                    if let Some(ref buf) = render_cache.window_titlebars.get(&tb_key) {
-                        let elem = TextureRenderElement::from_texture_buffer(
-                            Point::from((win_x as f64, tb_y as f64)),
-                            &*buf, None, None,
-                            Some(Size::from((win_w, titlebar_height))),
-                            Kind::Unspecified,
-                        );
-                        all_elements.push(TontooRenderElements::WindowTitlebar(WindowTitlebarElement(elem)));
-                    }
-
-                    // Traffic light dots — left side of titlebar
-                    {
-                        let tc_scale: i32 = 2;
-                        let dot_size = crate::shell::window_controls::DOT_SIZE as i32;
-                        let dot_spacing = crate::shell::window_controls::DOT_SPACING;
-                        let left_pad = crate::shell::window_controls::LEFT_PADDING;
-                        let top_pad = crate::shell::window_controls::TOP_PADDING;
-
-                        let is_focused = {
-                            let surface = window.toplevel().unwrap().wl_surface();
-                            focused_surface == Some(surface)
-                        };
-
-                        let window_id = format!("{}_{}", win_x as i32, win_y as i32);
-                        let is_hovered = window_controls.get(&window_id)
-                            .map(|c| c.hovered).unwrap_or(false);
-
-                        let colors = if is_focused {
-                            [
-                                ("close".to_string(), crate::shell::window_controls::close_color(scheme)),
-                                ("minimize".to_string(), crate::shell::window_controls::minimize_color(scheme)),
-                                ("maximize".to_string(), crate::shell::window_controls::maximize_color(scheme)),
-                            ]
-                        } else {
-                            [
-                                ("close_inactive".to_string(), crate::shell::window_controls::close_color_inactive(scheme)),
-                                ("minimize_inactive".to_string(), crate::shell::window_controls::minimize_color_inactive(scheme)),
-                                ("maximize_inactive".to_string(), crate::shell::window_controls::maximize_color_inactive(scheme)),
-                            ]
-                        };
-
-                        let symbols = ['x', '-', '+'];
-
-                        for (i, (name, color)) in colors.iter().enumerate() {
-                            let dot_key = (name.clone(), dot_size * tc_scale, tc_scale, scheme);
-                            if !render_cache.traffic_light_dots.contains_key(&dot_key) {
-                                let pixel_data = crate::shell::window_controls::create_traffic_light_dot(
-                                    dot_size * tc_scale, *color,
-                                );
-                                if let Ok(buf) = TextureBuffer::from_memory(
-                                    renderer, &pixel_data, Fourcc::Abgr8888,
-                                    (dot_size * tc_scale, dot_size * tc_scale),
-                                    false, tc_scale, Transform::Normal, None,
-                                ) {
-                                    render_cache.traffic_light_dots.insert(dot_key.clone(), buf);
-                                }
-                            }
-                            if let Some(ref buf) = render_cache.traffic_light_dots.get(&dot_key) {
-                                let dot_x = win_x + left_pad + i as f32 * (dot_size as f32 + dot_spacing);
-                                let dot_y = tb_y + top_pad;
-                                let elem = TextureRenderElement::from_texture_buffer(
-                                    Point::from((dot_x as f64, dot_y as f64)),
-                                    &*buf, None, None,
-                                    Some(Size::from((dot_size, dot_size))),
-                                    Kind::Unspecified,
-                                );
-                                all_elements.push(TontooRenderElements::WindowControls(WindowControlsElement(elem)));
-                            }
-
-                            // Hover symbol overlay
-                            if is_hovered {
-                                let sym = symbols[i];
-                                let sym_name = format!("sym_{}_{}", name, sym);
-                                let sym_key = (sym_name.clone(), dot_size * tc_scale, tc_scale, scheme);
-                                if !render_cache.traffic_light_dots.contains_key(&sym_key) {
-                                    let pixel_data = crate::shell::window_controls::create_traffic_light_symbol(
-                                        dot_size * tc_scale, sym,
-                                    );
-                                    if let Ok(buf) = TextureBuffer::from_memory(
-                                        renderer, &pixel_data, Fourcc::Abgr8888,
-                                        (dot_size * tc_scale, dot_size * tc_scale),
-                                        false, tc_scale, Transform::Normal, None,
-                                    ) {
-                                        render_cache.traffic_light_dots.insert(sym_key.clone(), buf);
-                                    }
-                                }
-                                if let Some(ref buf) = render_cache.traffic_light_dots.get(&sym_key) {
-                                    let dot_x = win_x + left_pad + i as f32 * (dot_size as f32 + dot_spacing);
-                                    let dot_y = tb_y + top_pad;
-                                    let elem = TextureRenderElement::from_texture_buffer(
-                                        Point::from((dot_x as f64, dot_y as f64)),
-                                        &*buf, None, None,
-                                        Some(Size::from((dot_size, dot_size))),
-                                        Kind::Unspecified,
-                                    );
-                                    all_elements.push(TontooRenderElements::WindowControls(WindowControlsElement(elem)));
-                                }
-                            }
-                        }
-                    }
-
-                    // Window title text — centered in titlebar
-                    {
-                        let title = get_window_title(window)
-                            .unwrap_or_else(|| "TontooOS".to_string());
-
-                        let tb_text_color = match scheme {
-                            crate::config::ColorScheme::Dark => [255u8, 255, 255, 255],
-                            crate::config::ColorScheme::Light => [0u8, 0, 0, 255],
-                        };
-                        let font_size = 13.0;
-                        if let Some(text_buf) = render_text_texture(renderer, &title, font_size, tb_text_color, render_cache.font.as_ref()) {
-                            let text_w = (title.len() as f32 * font_size * 0.55) as f32;
-                            let center_x = win_x + (win_w as f32 - text_w) / 2.0;
-                            let text_y = tb_y + (tb_h - font_size) / 2.0;
-                            let elem = TextureRenderElement::from_texture_buffer(
-                                Point::from((center_x as f64, text_y as f64)),
-                                &text_buf, None, None, None,
-                                Kind::Unspecified,
-                            );
-                            all_elements.push(TontooRenderElements::WindowTitlebar(WindowTitlebarElement(elem)));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Windows (middle layer)
+        // NOTE: Server-side titlebar removed — Client-Side Decorations (CSD) only.
+        // Windows (middle layer) — apps include their own header bar
         for elem in space_elements {
             all_elements.push(TontooRenderElements::Space(elem));
         }
@@ -1617,29 +1448,32 @@ fn render_surface(
             }
         }
 
-        // Shadows (bottommost, drawn behind windows)
-        for window in space.elements() {
-            if let Some(geo) = space.element_geometry(window) {
-                let shadow_key = (geo.size.w, geo.size.h, clear_color_to_scheme(clear_color));
-                if !render_cache.window_shadows.contains_key(&shadow_key) {
-                    if let Some(buf) = create_window_shadow_texture(renderer, geo.size.w, geo.size.h, clear_color_to_scheme(clear_color)) {
-                        render_cache.window_shadows.insert(shadow_key, buf);
-                    }
-                }
-                if let Some(ref buf) = render_cache.window_shadows.get(&shadow_key) {
-                    let shadow_pos = Point::from((
-                        (geo.loc.x - pad) as f64,
-                        (geo.loc.y as f64) - pad as f64 + offset_y,
-                    ));
-                    let shadow_size = Size::from((geo.size.w + pad * 2, geo.size.h + pad * 2));
-                    let elem = TextureRenderElement::from_texture_buffer(
-                        shadow_pos, &*buf, None, None,
-                        Some(shadow_size), Kind::Unspecified,
-                    );
-                    all_elements.push(TontooRenderElements::WindowShadow(WindowShadowElement(elem)));
-                }
-            }
-        }
+        // Shadows disabled for now - GTK theme's decoration box-shadow now handles it
+        // Compositor shadows were 10px rounded with custom blur, now let GTK's 24px decoration do it
+        // for window in space.elements() {
+        //     if !window.alive() { continue; }
+        //     if let Some(geo) = space.element_geometry(window) {
+        //         if geo.size.w <= 0 || geo.size.h <= 0 { continue; }
+        //         let shadow_key = (geo.size.w, geo.size.h, clear_color_to_scheme(clear_color));
+        //         if !render_cache.window_shadows.contains_key(&shadow_key) {
+        //             if let Some(buf) = create_window_shadow_texture(renderer, geo.size.w, geo.size.h, clear_color_to_scheme(clear_color)) {
+        //                 render_cache.window_shadows.insert(shadow_key, buf);
+        //             }
+        //         }
+        //         if let Some(ref buf) = render_cache.window_shadows.get(&shadow_key) {
+        //             let shadow_pos = Point::from((
+        //                 (geo.loc.x - pad) as f64,
+        //                 (geo.loc.y as f64) - pad as f64 + offset_y,
+        //             ));
+        //             let shadow_size = Size::from((geo.size.w + pad * 2, geo.size.h + pad * 2));
+        //             let elem = TextureRenderElement::from_texture_buffer(
+        //                 shadow_pos, &*buf, None, None,
+        //                 Some(shadow_size), Kind::Unspecified,
+        //             );
+        //             all_elements.push(TontooRenderElements::WindowShadow(WindowShadowElement(elem)));
+        //         }
+        //     }
+        // }
     }
 
     // 2. Wallpaper (bottommost, pushed last)
@@ -1674,32 +1508,44 @@ fn render_surface(
                     let _ = element.sync.wait();
                 }
             }
-            if !result.is_empty {
-                surface
-                    .compositor
-                    .queue_frame(None)
-                    .map_err(|e| SwapBuffersError::ContextLost(Box::new(e)))?;
+            if result.is_empty {
+                // Nothing changed since the last presented frame. The static
+                // desktop stays on screen; the next timer tick re-checks.
+                return Ok(());
             }
+
+            // Send frame callbacks before presenting so clients can start
+            // drawing their next frame immediately.
+            let time = Clock::<Monotonic>::new().now();
+            space.elements().for_each(|window| {
+                window.send_frame(output, time, Some(Duration::ZERO), |_, _| {
+                    Some(output.clone())
+                });
+            });
+            let map = layer_map_for_output(output);
+            for layer_surface in map.layers() {
+                layer_surface.send_frame(output, time, Some(Duration::ZERO), |_, _| {
+                    Some(output.clone())
+                });
+            }
+
+            // Present the frame synchronously with `commit_frame`.
+            //
+            // Unlike `queue_frame` + VBlank, this does not depend on page-flip
+            // completion events. Virtualized drivers such as vmwgfx (VirtualBox
+            // vmsvga) do not deliver reliable VBlank events, which left the
+            // swapchain stalled after the very first frame. `commit_frame`
+            // performs the commit directly (modeset / atomic commit without a
+            // flip event) and does not require `frame_submitted`, so the render
+            // loop stays alive purely on the 16ms render timer.
+            surface
+                .compositor
+                .commit_frame()
+                .map_err(|e| SwapBuffersError::ContextLost(Box::new(e)))?;
+            Ok(())
         }
         Err(e) => {
-            return Err(SwapBuffersError::ContextLost(Box::new(e)));
+            Err(SwapBuffersError::ContextLost(Box::new(e)))
         }
     }
-
-    let time = Clock::<Monotonic>::new().now();
-    space.elements().for_each(|window| {
-        window.send_frame(output, time, Some(Duration::ZERO), |_, _| {
-            Some(output.clone())
-        });
-    });
-
-    // Send frame callbacks to layer surfaces
-    let map = layer_map_for_output(output);
-    for layer_surface in map.layers() {
-        layer_surface.send_frame(output, time, Some(Duration::ZERO), |_, _| {
-            Some(output.clone())
-        });
-    }
-
-    Ok(())
 }

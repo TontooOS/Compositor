@@ -23,6 +23,10 @@ udev = [
     "dep:rustix",
 ]
 
+# TontooLibs via SDK – unified path (WSL: symlink /Library/System/sdk -> /mnt/c/Users/arlo1/Documents/TontooLibs/SDK)
+# Example when the compositor needs a framework:
+# sdk = { path = "/Library/System/sdk", features = ["Foundation", "Accessibility"] }
+# then in src/main.rs: sdk::preinclude!(); use Foundation::date_now;
 [dependencies]
 smithay = { version = "0.7", default-features = false, features = [
     "wayland_frontend",

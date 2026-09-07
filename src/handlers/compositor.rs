@@ -26,6 +26,13 @@ impl CompositorHandler for TontooCompositor {
         &client.get_data::<ClientState>().unwrap().compositor_state
     }
 
+    fn destroyed(&mut self, _surface: &WlSurface) {
+        // Surface destroyed (window closed) - force a redraw so ghost shadows are cleared.
+        // Without this, the udev render pump (event-driven) would not notice the dead
+        // window until the next dock animation / clock tick, leaving a 33ms+ ghost.
+        self.pending_redraw = true;
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         if !is_sync_subsurface(surface) {
@@ -44,6 +51,11 @@ impl CompositorHandler for TontooCompositor {
 
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
         resize_grab::handle_commit(&mut self.space, surface);
+
+        // A client submitted new buffer content: mark the output dirty. The
+        // udev render pump picks this up within one frame interval and
+        // coalesces bursts of commits into a single render pass.
+        self.pending_redraw = true;
     }
 }
 

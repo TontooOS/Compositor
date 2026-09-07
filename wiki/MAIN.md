@@ -1,9 +1,11 @@
 # Tontoo Compositor – Wiki
 
 The Wayland compositor for TontooOS, built on smithay 0.7. It renders the
-desktop shell (dock, menubar, window decorations) on the GPU, runs on either
+desktop shell (dock, window decorations) on the GPU, runs on either
 the winit or the udev/DRM backend, and exposes a custom `tontoo_ui` Wayland
-protocol for server-side-rendered applications.
+protocol for server-side-rendered applications. The top menu bar is not
+rendered here; it is the external `Menubar.app` system app (see
+[Menubar.md](Menubar.md)).
 
 - Repository: https://github.com/TontooOS/Libs
 - License: TCL v26.1
@@ -23,7 +25,7 @@ protocol for server-side-rendered applications.
 | Wallpaper | [Wallpaper.md](Wallpaper.md) | Wallpaper loading |
 | Shell | [Shell.md](Shell.md) | Aggregated shell state |
 | Dock | [Dock.md](Dock.md) | macOS-style dock with magnification |
-| Menubar | [Menubar.md](Menubar.md) | macOS-style top menu bar |
+| Menubar | [Menubar.md](Menubar.md) | External `Menubar.app` system app (removed from compositor) |
 | Launcher | [Launcher.md](Launcher.md) | Application launcher overlay |
 | Topbar | [Topbar.md](Topbar.md) | Simple glass top bar |
 | WindowControls | [WindowControls.md](WindowControls.md) | Traffic light window buttons |
@@ -65,4 +67,19 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-07: Fix traffic lights and theme toggle — traffic lights
+  (`button-layout`, `gtk-decoration-layout`) are fixed once and no longer
+  switch; only `gtk-theme` and `color-scheme` toggle via
+  `org.gnome.desktop.interface`; default `icon-theme` is now `MacTahoe`
+  (was `Adwaita`) in `90_tontoo.gschema.override`; theme switcher scripts
+  preserve the decoration layout. See [Configuration.md](Configuration.md).
+
+- 2026-09-07: Fix oversized udev framebuffer (4K+ on smaller screens) — `scan_connectors` picked the largest advertised DRM mode by area; both output and surface now use the native EDID `PREFERRED` mode via `pick_connector_mode` with full mode logging. See [UdevBackend.md](UdevBackend.md).
+- 2026-09-06: Remove the compositor-internal menubar — deleted `shell::menubar` (`Menubar`, `MenubarItem`), the `MenuBar` render element, menubar glass/logo/clock rendering (winit + udev), `RenderCache::{menubar_glass, tontoo_logo, clock_text}`, `TontooCompositor::last_clock_minute`, `current_minute_of_day` and the clock-minute render pump trigger. The top bar is now the external `Menubar.app` system app (TBuild bundle at `/System/Applications/Menubar.app`, `menubar` LaunchPad service). The compositor only reserves the 30.0 px top strut (`ShellState::menubar_height`); windows map below it. See [Menubar.md](Menubar.md).
+- 2026-09-06: Fix ~30s typing stall in Wayland clients on the udev backend — root cause was a missing `DisplayHandle::flush_clients` after input processing and after the render timer (events/frame callbacks sat in userspace buffers until unrelated client traffic flushed them; the winit backend already flushed). Added both flushes in `src/udev.rs`. See [UdevBackend.md](UdevBackend.md) troubleshooting section.
+- 2026-09-06: Fix black screen on VirtualBox boot (SSH works, display black) — root cause was `plymouthd` holding the DRM master (`seatd: Could not make device fd drm master: Device or resource busy`, compositor `scan_connectors: Permission denied` on `/dev/dri/card0`). Boot integration fix in `BaseOS`: add `0755` `file_permissions` for `start-compositor.sh`/`tontoo-sshd.sh`/`tontoo-net-up.sh` in `profiledef.sh`, harden `start-compositor.sh` (sudo plymouth quit, 10s wait, stderr logging). See [UdevBackend.md](UdevBackend.md) troubleshooting section.
+
+- 2026-08-28: Fix compositor `stopped` on boot — add `XDG_RUNTIME_DIR` fallback in `init_wayland_listener` (`RuntimeDirNotSet` panic at `src/state.rs:203` when started without LaunchPad env), fix `start-compositor.sh` to set `XDG_RUNTIME_DIR`, handle plymouth DRM master (`plymouth deactivate/quit` via sudo, `pkill @lymouthd`, wait for `fuser /dev/dri/card0`), make script executable, clean stale `wayland-*.lock`; fix LaunchPad `restart` for stopped services and retry on spawn failure with backoff, add `.sh` fallback via `/bin/sh`.
+- 2026-08-27: Remove compositor-side topbar/titlebar — switch to Client-Side Decorations (CSD): apps now draw their own decoration bar; compositor keeps only shadow (improved 3-layer shadow with vertical bias, pad 64, offset 12, radii 10) + rounded border; `XdgDecorationHandler` now forces `ClientSide`; input titlebar/traffic-light handling removed; docs updated.
+- 2026-08-23: Fix 60 fps DRM commit storm on VirtualBox vmwgfx — render pump is now event-driven (only on `pending_redraw`, dock/animations, or clock minute change); dock uses real `dt` and `is_animating()`.
 - 2026-08-12: Initial wiki, extracted from the current source tree.

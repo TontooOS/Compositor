@@ -9,9 +9,6 @@ pub type TexBuf = smithay::backend::renderer::element::texture::TextureBuffer<Gl
 pub struct RenderCache {
     pub dock_panel: Option<(i32, i32, ColorScheme, TexBuf)>,
     pub dock_icons: HashMap<(String, ColorScheme, i32), TexBuf>,
-    pub menubar_glass: Option<(i32, i32, ColorScheme, TexBuf)>,
-    /// Cached TontooOS logo texture for the menubar
-    pub tontoo_logo: Option<TexBuf>,
     pub window_shadows: HashMap<(i32, i32, ColorScheme), TexBuf>,
     pub window_borders: HashMap<(i32, i32, ColorScheme), TexBuf>,
     /// Cached titlebar textures: (width, height, ColorScheme) -> TexBuf
@@ -28,8 +25,6 @@ impl RenderCache {
         Self {
             dock_panel: None,
             dock_icons: HashMap::new(),
-            menubar_glass: None,
-            tontoo_logo: None,
             window_shadows: HashMap::new(),
             window_borders: HashMap::new(),
             window_titlebars: HashMap::new(),
@@ -59,7 +54,6 @@ impl RenderCache {
     pub fn invalidate(&mut self) {
         self.dock_panel = None;
         self.dock_icons.clear();
-        self.menubar_glass = None;
         self.window_shadows.clear();
         self.window_borders.clear();
         self.window_titlebars.clear();

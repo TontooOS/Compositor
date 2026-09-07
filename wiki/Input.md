@@ -1,8 +1,12 @@
 # Input
 
 The input module processes keyboard, pointer motion, pointer button, and
-pointer axis events. It also manages dock hover detection, traffic light
-hover detection, and application launching.
+pointer axis events. It also manages dock hover detection, tontoo_ui hover,
+and application launching.
+
+> **CSD:** The compositor no longer handles window traffic light
+> clicks or titlebar drag. Those are drawn and handled by clients.
+> Window movement is via `xdg_toplevel::move_request` from the client.
 
 ## Input Processing
 
@@ -26,9 +30,9 @@ handled before forwarding:
 
 #### Pointer Motion
 
-Updates the cursor speed magnification, dock hover state, traffic light hover
-state, and tontoo_ui hover state. Then forwards the event to the focused
-client.
+Updates the cursor speed magnification, dock hover state, and tontoo_ui hover
+state. Then forwards the event to the focused client. Traffic light hover was
+removed with CSD.
 
 #### Pointer Absolute Motion
 
@@ -47,14 +51,14 @@ On button press, the following elements are checked in order:
    `tontoo_ui` surface. Performs hit testing on the widget tree and sends
    `widget_clicked` events.
 
-3. **Window traffic light clicks**: checks if the click is in a window's
-   titlebar area. Handles close, minimize, and maximize actions. If no
-   traffic light was clicked, starts a move grab on the titlebar.
-
-4. **Window focus**: on first click on a window, raises it, sets keyboard
-   focus, and updates the dock/menubar active app. On second click on the
+3. **Window focus**: on first click on a window, raises it, sets keyboard
+   focus, and updates the dock active app. On second click on the
    same window, passes the click through to the application. On click on
    empty space, deactivates all windows.
+
+> **Removed:** Window traffic light clicks and titlebar drag are no longer
+> handled here — windows use Client-Side Decorations. Move is via the
+> client's `xdg_toplevel.move_request`.
 
 #### Pointer Axis
 
@@ -99,10 +103,8 @@ margin, 48px icon size, 12px icon gap.
 
 Updates the dock hover state based on the pointer position.
 
-### update_traffic_light_hover
-
-Updates the `hovered` flag on each window's `WindowControls` based on
-whether the pointer is in the traffic light area.
+> `update_traffic_light_hover` was removed with CSD — clients handle their
+> own hover. `WindowControls` remains as an app helper.
 
 ### update_tontoo_ui_hover
 
@@ -114,6 +116,6 @@ Performs hit testing on `tontoo_ui` widget trees and sends
 - [State.md](State.md) -- `process_input_event` is defined on `TontooCompositor`
 - [Cursor.md](Cursor.md) -- `update_speed` is called on pointer motion
 - [Dock.md](Dock.md) -- `bounce_icon`, `set_hover`, `set_active_app`
-- [Menubar.md](Menubar.md) -- `set_app_name`
-- [WindowControls.md](WindowControls.md) -- `hit_test` and `is_in_area`
-- [Grabs.md](Grabs.md) -- `MoveSurfaceGrab` is started from titlebar drag
+- [Menubar.md](Menubar.md) -- external `Menubar.app` (no compositor state)
+- [WindowControls.md](WindowControls.md) -- helper for apps (no longer used by compositor)
+- [Grabs.md](Grabs.md) -- `MoveSurfaceGrab` now via client `move_request` (CSD)
