@@ -17,6 +17,7 @@ udev = [
     "smithay/backend_libinput",
     "smithay/backend_session",
     "smithay/backend_session_libseat",
+    "smithay/xwayland",
     "dep:libseat",
     "dep:gbm",
     "dep:input",
@@ -28,7 +29,9 @@ udev = [
 # sdk = { path = "/Library/System/sdk", features = ["Foundation", "Accessibility"] }
 # then in src/main.rs: sdk::preinclude!(); use Foundation::date_now;
 [dependencies]
-smithay = { version = "0.7", default-features = false, features = [
+# Pinned to a tested master revision (post-0.7.0, pre-0.8.0). Update the rev
+# deliberately after re-verifying; branch=master would move underneath us.
+smithay = { git = "https://github.com/Smithay/smithay.git", rev = "d4bb0de4c983f64e8498e465f084d7621df22b3d", default-features = false, features = [
     "wayland_frontend",
     "desktop",
 ] }

@@ -14,7 +14,7 @@ The system menu bar is a standalone TontooOS app built with TBuild from
 - The ISO build stages it as an extracted bundle at
   `/System/Applications/Menubar.app` (see `BaseOS/scripts/stage-menubar.sh`).
 - At boot the `menubar` LaunchPad service
-  (`Library/System/Launchpads/menubar.service`, type `sys`) starts it via
+  (`System/services/menubar.service`, type `sys`) starts it via
   `/usr/local/bin/start-menubar.sh`, which waits for the compositor
   Wayland socket and then execs `/usr/bin/tapp
   /System/Applications/Menubar.app`. It depends on `compositor` and
@@ -25,9 +25,17 @@ The system menu bar is a standalone TontooOS app built with TBuild from
 
 ## Reserved Top Strut
 
-The compositor renders nothing at the top of the screen. Windows are
-placed below the reserved strut (see
-[WaylandHandlers.md](WaylandHandlers.md)).
+The compositor renders nothing at the top of the screen itself, but it
+draws the external bar: `Menubar.app` is a layer-shell client (Top layer,
+top/left/right anchors, 36px exclusive zone via `gtk4-layer-shell`), and
+the render pump composites Top/Overlay layer surfaces above windows and
+Background/Bottom ones below. Windows are placed below the reserved
+strut (see [WaylandHandlers.md](WaylandHandlers.md)).
+
+`start-menubar.sh` runs the app with `GDK_BACKEND=wayland` (X11 remains
+as in-app fallback). On XWayland the bar self-positions with
+`XMoveWindow`, which the compositor honors in `configure_request`, but
+the buffer loses its alpha there — layer-shell is the supported path.
 
 ### ShellState::menubar_height
 

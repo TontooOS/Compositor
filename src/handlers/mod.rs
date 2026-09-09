@@ -5,15 +5,15 @@ pub mod xdg_decoration;
 mod xdg_shell;
 
 use crate::TontooCompositor;
-use crate::state::{get_app_id, get_window_title};
+use crate::state::window_app_name;
 
-use smithay::input::{Seat, SeatHandler, SeatState};
+use smithay::input::{dnd::DndGrabHandler, Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::output::OutputHandler;
+use smithay::wayland::pointer_constraints::PointerConstraintsHandler;
 use smithay::wayland::selection::data_device::{
-    set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
-    ServerDndGrabHandler,
+    set_data_device_focus, DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
 };
 use smithay::wayland::selection::SelectionHandler;
 
@@ -49,10 +49,9 @@ impl SeatHandler for TontooCompositor {
         if let Some(wl_surface) = focused {
             // Find the window with this surface
             if let Some(window) = self.space.elements().find(|w| {
-                w.toplevel().unwrap().wl_surface() == wl_surface
+                crate::state::window_wl_surface_any(w).as_ref() == Some(wl_surface)
             }).cloned() {
-                let app_name = get_app_id(&window)
-                    .or_else(|| get_window_title(&window))
+                let app_name = window_app_name(&window)
                     .unwrap_or_else(|| "TontooOS".to_string());
                 self.shell.dock.set_active_app(&app_name);
             }
@@ -66,20 +65,18 @@ impl SelectionHandler for TontooCompositor {
     type SelectionUserData = ();
 }
 
-impl ClientDndGrabHandler for TontooCompositor {}
-impl ServerDndGrabHandler for TontooCompositor {}
+impl WaylandDndGrabHandler for TontooCompositor {}
+
+impl DndGrabHandler for TontooCompositor {}
+
+impl PointerConstraintsHandler for TontooCompositor {}
 
 impl DataDeviceHandler for TontooCompositor {
-    fn data_device_state(&self) -> &DataDeviceState {
-        &self.data_device_state
+    fn data_device_state(&mut self) -> &mut DataDeviceState {
+        &mut self.data_device_state
     }
 }
 
 impl OutputHandler for TontooCompositor {}
 
-smithay::delegate_compositor!(TontooCompositor);
-smithay::delegate_shm!(TontooCompositor);
-smithay::delegate_output!(TontooCompositor);
-smithay::delegate_seat!(TontooCompositor);
-smithay::delegate_xdg_shell!(TontooCompositor);
-smithay::delegate_data_device!(TontooCompositor);
+smithay::delegate_dispatch2!(TontooCompositor);

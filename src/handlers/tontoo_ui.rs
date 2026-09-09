@@ -468,7 +468,7 @@ mod tests {
     fn dummy_object_id() -> ObjectId {
         // We can't easily construct a real ObjectId without a display, so
         // use a placeholder.  For unit tests this is sufficient.
-        ObjectId::from_non_null_pointer(0x1 as *mut _)
+        ObjectId::null()
     }
 
     #[test]

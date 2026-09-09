@@ -79,7 +79,7 @@ impl XdgShellHandler for TontooCompositor {
             let window = self
                 .space
                 .elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == wl_surface)
+                .find(|w| crate::state::window_wl_surface_any(w).as_ref() == Some(wl_surface))
                 .unwrap()
                 .clone();
             let initial_window_location = self.space.element_location(&window).unwrap();
@@ -110,7 +110,7 @@ impl XdgShellHandler for TontooCompositor {
             let window = self
                 .space
                 .elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == wl_surface)
+                .find(|w| crate::state::window_wl_surface_any(w).as_ref() == Some(wl_surface))
                 .unwrap()
                 .clone();
             let initial_window_location = self.space.element_location(&window).unwrap();
@@ -155,21 +155,25 @@ fn check_grab(
 pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: &WlSurface) {
     if let Some(window) = space
         .elements()
-        .find(|w| w.toplevel().unwrap().wl_surface() == surface)
+        .find(|w| crate::state::window_wl_surface_any(w).as_ref() == Some(surface))
         .cloned()
     {
-        let initial_configure_sent = with_states(surface, |states| {
-            states
-                .data_map
-                .get::<XdgToplevelSurfaceData>()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .initial_configure_sent
-        });
+        // X11 windows share this commit path but carry no XDG toplevel
+        // state; only xdg windows need the initial configure.
+        if let Some(toplevel) = window.toplevel() {
+            let initial_configure_sent = with_states(surface, |states| {
+                states
+                    .data_map
+                    .get::<XdgToplevelSurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .initial_configure_sent
+            });
 
-        if !initial_configure_sent {
-            window.toplevel().unwrap().send_configure();
+            if !initial_configure_sent {
+                toplevel.send_configure();
+            }
         }
     }
 
@@ -194,7 +198,7 @@ impl TontooCompositor {
         let Some(window) = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &root)
+            .find(|w| crate::state::window_wl_surface_any(w).as_ref() == Some(&root))
         else {
             return;
         };

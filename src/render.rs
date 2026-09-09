@@ -6,6 +6,7 @@ use smithay::{
         renderer::{
             damage::OutputDamageTracker,
             element::{
+                surface::render_elements_from_surface_tree,
                 texture::{TextureBuffer, TextureRenderElement},
                 Kind,
             },
@@ -18,12 +19,13 @@ use smithay::{
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
     utils::{Physical, Point, Rectangle, Size, Transform},
+    wayland::shell::wlr_layer::Layer as WlrLayer,
 };
 
 use crate::cursor::{
     CursorRenderElement, CursorTextureElement, DockBarElement,
-    TontooRenderElements, WallpaperElement, WindowBorderElement, WindowControlsElement,
-    WindowShadowElement, WindowTitlebarElement,
+    TontooRenderElements, WallpaperElement, WindowBorderElement,
+    WindowShadowElement,
 };
 use crate::wallpaper::Wallpaper;
 use crate::TontooCompositor;
@@ -46,6 +48,7 @@ pub fn init_winit(
             subpixel: Subpixel::Unknown,
             make: "TontooOS".into(),
             model: "TontooCompositor".into(),
+            serial_number: "".into(),
         },
     );
     let _global = output.create_global::<TontooCompositor>(&state.display_handle);
@@ -162,6 +165,33 @@ pub fn init_winit(
                             all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(wp)));
                         }
 
+                        // Layer-shell surfaces below windows (Background/Bottom layers).
+                        {
+                            let map = layer_map_for_output(&output);
+                            for layer_surface in map.layers() {
+                                if !matches!(
+                                    layer_surface.layer(),
+                                    WlrLayer::Background | WlrLayer::Bottom
+                                ) {
+                                    continue;
+                                }
+                                let Some(geo) = map.layer_geometry(layer_surface) else {
+                                    continue;
+                                };
+                                // CursorSurface is the generic wl_surface element variant.
+                                let elems: Vec<TontooRenderElements> =
+                                    render_elements_from_surface_tree(
+                                        renderer,
+                                        layer_surface.wl_surface(),
+                                        Point::<i32, Physical>::from((geo.loc.x, geo.loc.y)),
+                                        1.0,
+                                        1.0,
+                                        Kind::Unspecified,
+                                    );
+                                all_elements.extend(elems);
+                            }
+                        }
+
                         if false {
                             let blur = crate::render::WINDOW_SHADOW_BLUR;
                             let pad = blur as i32 + 4;
@@ -214,149 +244,29 @@ pub fn init_winit(
                             all_elements.push(TontooRenderElements::Space(elem));
                         }
 
-                        if false {
-                            // Window titlebar panels disabled - now handled by GTK CSD
-                            
-                            for window in state.space.elements() {
-                                if let Some(geo) = state.space.element_geometry(window) {
-                                    let win_x = geo.loc.x as f32;
-                                    let win_y = geo.loc.y as f32;
-                                    let win_w = geo.size.w;
-                                    let tb_h = crate::render::TITLEBAR_HEIGHT as f32;
-                                    let tb_y = win_y - tb_h;
-
-                                    // Draw glass titlebar background (per-width cache)
-                                    let tb_key = (win_w, tb_h as i32, state.color_scheme);
-                                    if !state.render_cache.window_titlebars.contains_key(&tb_key) {
-                                        if let Some(buf) = create_window_titlebar_texture(renderer, win_w, state.color_scheme) {
-                                            state.render_cache.window_titlebars.insert(tb_key, buf);
-                                        }
-                                    }
-                                    if let Some(ref buf) = state.render_cache.window_titlebars.get(&tb_key) {
-                                        let elem = TextureRenderElement::from_texture_buffer(
-                                            Point::from((win_x as f64, tb_y as f64)),
-                                            buf, None, None,
-                                            Some(Size::from((win_w, tb_h as i32))),
-                                            Kind::Unspecified,
-                                        );
-                                        all_elements.push(TontooRenderElements::WindowTitlebar(WindowTitlebarElement(elem)));
-                                    }
-
-                                    // Traffic light dots (close / minimize / maximize) — left side of titlebar
-                                    {
-                                        let tc_scale: i32 = 2;
-                                        let dot_size = crate::shell::window_controls::DOT_SIZE as i32;
-                                        let dot_spacing = crate::shell::window_controls::DOT_SPACING;
-                                        let left_pad = crate::shell::window_controls::LEFT_PADDING;
-                                        let top_pad = crate::shell::window_controls::TOP_PADDING;
-
-                                        let is_focused = {
-                                            let surface = window.toplevel().unwrap().wl_surface();
-                                            state.focused_surface.as_ref() == Some(surface)
-                                        };
-
-                                        let window_id = format!("{}_{}", win_x as i32, win_y as i32);
-                                        let is_hovered = state.shell.window_controls.get(&window_id)
-                                            .map(|c| c.hovered).unwrap_or(false);
-
-                                        let colors = if is_focused {
-                                            [
-                                                ("close".to_string(), crate::shell::window_controls::close_color(state.color_scheme)),
-                                                ("minimize".to_string(), crate::shell::window_controls::minimize_color(state.color_scheme)),
-                                                ("maximize".to_string(), crate::shell::window_controls::maximize_color(state.color_scheme)),
-                                            ]
-                                        } else {
-                                            [
-                                                ("close_inactive".to_string(), crate::shell::window_controls::close_color_inactive(state.color_scheme)),
-                                                ("minimize_inactive".to_string(), crate::shell::window_controls::minimize_color_inactive(state.color_scheme)),
-                                                ("maximize_inactive".to_string(), crate::shell::window_controls::maximize_color_inactive(state.color_scheme)),
-                                            ]
-                                        };
-
-                                        let symbols = ['x', '-', '+'];
-
-                                        for (i, (name, color)) in colors.iter().enumerate() {
-                                            let dot_key = (name.clone(), dot_size * tc_scale, tc_scale, state.color_scheme);
-                                            if !state.render_cache.traffic_light_dots.contains_key(&dot_key) {
-                                                let pixel_data = crate::shell::window_controls::create_traffic_light_dot(
-                                                    dot_size * tc_scale, *color,
-                                                );
-                                                if let Ok(buf) = TextureBuffer::from_memory(
-                                                    renderer, &pixel_data, Fourcc::Abgr8888,
-                                                    (dot_size * tc_scale, dot_size * tc_scale),
-                                                    false, tc_scale, Transform::Normal, None,
-                                                ) {
-                                                    state.render_cache.traffic_light_dots.insert(dot_key.clone(), buf);
-                                                }
-                                            }
-                                            if let Some(ref buf) = state.render_cache.traffic_light_dots.get(&dot_key) {
-                                                let dot_x = win_x + left_pad + i as f32 * (dot_size as f32 + dot_spacing);
-                                                let dot_y = tb_y + top_pad;
-                                                let elem = TextureRenderElement::from_texture_buffer(
-                                                    Point::from((dot_x as f64, dot_y as f64)),
-                                                    &buf, None, None,
-                                                    Some(Size::from((dot_size, dot_size))),
-                                                    Kind::Unspecified,
-                                                );
-                                                all_elements.push(TontooRenderElements::WindowControls(WindowControlsElement(elem)));
-                                            }
-
-                                            // Hover symbol (× − +) overlay
-                                            if is_hovered {
-                                                let sym = symbols[i];
-                                                let sym_name = format!("sym_{}_{}", name, sym);
-                                                let sym_key = (sym_name.clone(), dot_size * tc_scale, tc_scale, state.color_scheme);
-                                                if !state.render_cache.traffic_light_dots.contains_key(&sym_key) {
-                                                    let pixel_data = crate::shell::window_controls::create_traffic_light_symbol(
-                                                        dot_size * tc_scale, sym,
-                                                    );
-                                                    if let Ok(buf) = TextureBuffer::from_memory(
-                                                        renderer, &pixel_data, Fourcc::Abgr8888,
-                                                        (dot_size * tc_scale, dot_size * tc_scale),
-                                                        false, tc_scale, Transform::Normal, None,
-                                                    ) {
-                                                        state.render_cache.traffic_light_dots.insert(sym_key.clone(), buf);
-                                                    }
-                                                }
-                                                if let Some(ref buf) = state.render_cache.traffic_light_dots.get(&sym_key) {
-                                                    let dot_x = win_x + left_pad + i as f32 * (dot_size as f32 + dot_spacing);
-                                                    let dot_y = tb_y + top_pad;
-                                                    let elem = TextureRenderElement::from_texture_buffer(
-                                                        Point::from((dot_x as f64, dot_y as f64)),
-                                                        &buf, None, None,
-                                                        Some(Size::from((dot_size, dot_size))),
-                                                        Kind::Unspecified,
-                                                    );
-                                                    all_elements.push(TontooRenderElements::WindowControls(WindowControlsElement(elem)));
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Window title text — centered in titlebar
-                                    {
-                                        let title = crate::state::get_window_title(window)
-                                            .unwrap_or_else(|| "TontooOS".to_string());
-
-                                        let tb_text_color = if state.color_scheme == crate::config::ColorScheme::Dark {
-                                            [255u8, 255, 255, 255]
-                                        } else {
-                                            [0u8, 0, 0, 255]
-                                        };
-                                        let font_size = 13.0;
-                                        if let Some(text_buf) = render_text_texture(renderer, &title, font_size, tb_text_color, state.render_cache.font.as_ref()) {
-                                            let text_w = (title.len() as f32 * font_size * 0.55) as f32;
-                                            let center_x = win_x + (win_w as f32 - text_w) / 2.0;
-                                            let text_y = tb_y + (tb_h - font_size) / 2.0;
-                                            let elem = TextureRenderElement::from_texture_buffer(
-                                                Point::from((center_x as f64, text_y as f64)),
-                                                &text_buf, None, None, None,
-                                                Kind::Unspecified,
-                                            );
-                                            all_elements.push(TontooRenderElements::WindowTitlebar(WindowTitlebarElement(elem)));
-                                        }
-                                    }
-                                }
+                        // Server-side titlebars for SSD windows (Chrome/VSCode
+                        // with system title bar). CSD windows draw their own
+                        // header; maximized windows keep full content.
+                        for window in state.space.elements() {
+                            if !crate::shell::ssd::is_ssd(window) {
+                                continue;
+                            }
+                            if crate::shell::ssd::is_maximized(window) {
+                                continue;
+                            }
+                            if let Some(geo) = state.space.element_geometry(window) {
+                                let title = crate::state::get_window_title(window);
+                                crate::shell::ssd::push_ssd_elements(
+                                    renderer,
+                                    &mut state.render_cache,
+                                    &mut state.shell.window_controls,
+                                    state.focused_surface.as_ref(),
+                                    state.color_scheme,
+                                    window,
+                                    geo,
+                                    title,
+                                    &mut all_elements,
+                                );
                             }
                         }
 
@@ -526,9 +436,36 @@ pub fn init_winit(
                             }
                         }
 
-                        // Top strut: reserved for the external Menubar.app system app.
-                        // The compositor renders nothing here; windows are placed
-                        // below the strut (see handlers/xdg_shell.rs).
+                        // Top strut: reserved for the external Menubar.app system
+                        // app, drawn below as a Top-layer surface.
+
+                        // Layer-shell surfaces above windows (Top/Overlay
+                        // layers, e.g. the Menubar top bar).
+                        {
+                            let map = layer_map_for_output(&output);
+                            for layer_surface in map.layers() {
+                                if !matches!(
+                                    layer_surface.layer(),
+                                    WlrLayer::Top | WlrLayer::Overlay
+                                ) {
+                                    continue;
+                                }
+                                let Some(geo) = map.layer_geometry(layer_surface) else {
+                                    continue;
+                                };
+                                // CursorSurface is the generic wl_surface element variant.
+                                let elems: Vec<TontooRenderElements> =
+                                    render_elements_from_surface_tree(
+                                        renderer,
+                                        layer_surface.wl_surface(),
+                                        Point::<i32, Physical>::from((geo.loc.x, geo.loc.y)),
+                                        1.0,
+                                        1.0,
+                                        Kind::Unspecified,
+                                    );
+                                all_elements.extend(elems);
+                            }
+                        }
 
                         // Cursor rendered ABOVE all content
                         if let Some(e) = widget_cursor {
@@ -744,65 +681,6 @@ fn draw_letter_bitmap(data: &mut [u8], buf_w: u32, x: i32, y: i32, letter: char,
     }
 }
 
-fn render_text_texture(
-    renderer: &mut GlesRenderer,
-    text: &str,
-    font_size: f32,
-    color: [u8; 4],
-    font: Option<&fontdue::Font>,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let font = font?;
-
-    let px_size = font_size.max(1.0);
-    let mut cursor_x: u32 = 0;
-    let mut total_w: u32 = 0;
-    let mut max_h: u32 = 0;
-
-    struct Glyph { x: u32, width: u32, height: u32, bitmap: Vec<u8> }
-    let mut glyphs: Vec<Glyph> = Vec::new();
-
-    for ch in text.chars() {
-        let (metrics, bitmap) = font.rasterize(ch, px_size);
-        let w = metrics.width as u32;
-        let h = metrics.height as u32;
-        if w > 0 && h > 0 {
-            glyphs.push(Glyph { x: cursor_x, width: w, height: h, bitmap });
-            total_w = total_w.max(cursor_x + w);
-        }
-        cursor_x += metrics.advance_width as u32;
-        if h > max_h { max_h = h; }
-    }
-
-    let total_h = if max_h > 0 { max_h } else { px_size as u32 };
-    if total_w == 0 || total_h == 0 { return None; }
-
-    let mut rgba = vec![0u8; (total_w * total_h * 4) as usize];
-    for g in &glyphs {
-        for row in 0..g.height {
-            for col in 0..g.width {
-                let alpha = g.bitmap[(row * g.width + col) as usize];
-                if alpha == 0 { continue };
-                // Flip Y for OpenGL (texture Y=0 is bottom, bitmap Y=0 is top)
-                let flipped_row = g.height - 1 - row;
-                let px = ((flipped_row * total_w + g.x + col) * 4) as usize;
-                if px + 3 < rgba.len() {
-                    let a = ((alpha as u32 * color[3] as u32) / 255) as u8;
-                    rgba[px] = (color[0] as u32 * a as u32 / 255) as u8;
-                    rgba[px + 1] = (color[1] as u32 * a as u32 / 255) as u8;
-                    rgba[px + 2] = (color[2] as u32 * a as u32 / 255) as u8;
-                    rgba[px + 3] = a;
-                }
-            }
-        }
-    }
-
-    TextureBuffer::from_memory(
-        renderer, &rgba, Fourcc::Abgr8888,
-        (total_w as i32, total_h as i32),
-        false, 1, Transform::Normal, None,
-    ).ok()
-}
-
 fn create_dock_icon(renderer: &mut GlesRenderer, size: i32, corner_radius: i32, color: u32, letter: char, tex_scale: i32) -> Option<TextureBuffer<GlesTexture>> {
     let su = size as u32; let cru = corner_radius as u32;
     let mut data = vec![0u8; (su * su * 4) as usize];
@@ -864,8 +742,8 @@ pub const WINDOW_SHADOW_OFFSET_Y: f64 = 6.0;
 pub const WINDOW_SHADOW_BLUR: f64 = 25.0;
 pub const WINDOW_SHADOW_BASE_ALPHA_DARK: f64 = 0.20;
 pub const WINDOW_SHADOW_BASE_ALPHA_LIGHT: f64 = 0.12;
-pub const TITLEBAR_HEIGHT: i32 = crate::config::TITLEBAR_HEIGHT;
 pub const WINDOW_BORDER_WIDTH: f64 = 0.5;
+// (Server-side titlebar textures live in `shell::ssd`, shared by both backends.)
 
 /// Create a window shadow texture.
 /// Returns a buffer of size (tex_w, tex_h) containing a gaussian-blurred
@@ -1006,56 +884,4 @@ pub fn create_window_border_mask_texture(
     .ok()
 }
 
-pub fn create_window_titlebar_texture(
-    renderer: &mut GlesRenderer,
-    win_w: i32,
-    color_scheme: crate::config::ColorScheme,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let tw = win_w as u32;
-    let th = TITLEBAR_HEIGHT as u32;
-    if tw == 0 {
-        return None;
-    }
-    let mut data = vec![0u8; (tw * th * 4) as usize];
-
-    // Solid titlebar — macOS Tahoe style, always #ececec
-    let corner_r: f32 = 10.0;
-    let (bg_r, bg_g, bg_b) = (236u8, 236u8, 236u8); // #ececec
-
-    for y in 0..th {
-        for x in 0..tw {
-            let i = ((y * tw + x) * 4) as usize;
-            // Rounded top corners
-            let alpha = if (x as f32) < corner_r && (y as f32) < corner_r {
-                let dx = corner_r - x as f32;
-                let dy = corner_r - y as f32;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist > corner_r { 0.0 } else { 1.0 - (1.0 - dist / corner_r).powf(1.5) }
-            } else if (x as f32) >= tw as f32 - corner_r && (y as f32) < corner_r {
-                let dx = x as f32 - (tw as f32 - corner_r);
-                let dy = corner_r - y as f32;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist > corner_r { 0.0 } else { 1.0 - (1.0 - dist / corner_r).powf(1.5) }
-            } else {
-                1.0
-            };
-            let a = (alpha * 255.0) as u8; // solid
-            data[i] = bg_r;
-            data[i + 1] = bg_g;
-            data[i + 2] = bg_b;
-            data[i + 3] = a;
-        }
-    }
-
-    TextureBuffer::from_memory(
-        renderer,
-        &data,
-        Fourcc::Abgr8888,
-        (win_w, TITLEBAR_HEIGHT),
-        false,
-        1,
-        Transform::Normal,
-        None,
-    )
-    .ok()
-}
+// (Server-side titlebar textures live in `shell::ssd`, shared by both backends.)

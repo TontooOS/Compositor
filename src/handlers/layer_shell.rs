@@ -1,7 +1,6 @@
 use crate::TontooCompositor;
 
 use smithay::{
-    delegate_layer_shell,
     desktop::{layer_map_for_output, LayerSurface as DesktopLayerSurface},
     output::Output,
     reexports::wayland_server::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
@@ -64,5 +63,3 @@ impl WlrLayerShellHandler for TontooCompositor {
         self.pending_redraw = true;
     }
 }
-
-delegate_layer_shell!(TontooCompositor);

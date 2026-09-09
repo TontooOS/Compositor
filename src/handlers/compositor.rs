@@ -23,7 +23,22 @@ impl CompositorHandler for TontooCompositor {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        &client.get_data::<ClientState>().unwrap().compositor_state
+        if let Some(data) = client.get_data::<ClientState>() {
+            return &data.compositor_state;
+        }
+        // The XWayland server's internal client is inserted by smithay with
+        // `XWaylandClientData`, not our `ClientState`. Serve its own
+        // compositor state so X11 window commits keep working (udev only).
+        #[cfg(feature = "udev")]
+        if let Some(data) = client.get_data::<smithay::xwayland::XWaylandClientData>() {
+            return &data.compositor_state;
+        }
+        // Unknown client without state data: shared static fallback. A
+        // panic here crash-loops the whole compositor via the launchpad
+        // supervisor, so never unwrap.
+        static FALLBACK: std::sync::OnceLock<CompositorClientState> =
+            std::sync::OnceLock::new();
+        FALLBACK.get_or_init(CompositorClientState::default)
     }
 
     fn destroyed(&mut self, _surface: &WlSurface) {
@@ -43,7 +58,7 @@ impl CompositorHandler for TontooCompositor {
             if let Some(window) = self
                 .space
                 .elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == &root)
+                .find(|w| crate::state::window_wl_surface_any(w).as_ref() == Some(&root))
             {
                 window.on_commit();
             }
@@ -51,6 +66,27 @@ impl CompositorHandler for TontooCompositor {
 
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
         resize_grab::handle_commit(&mut self.space, surface);
+
+        // Layer-shell surfaces: re-arrange with the newly committed size
+        // and drive the configure/ack cycle. Without this the client waits
+        // for its initial configure forever and never draws.
+        let outputs: Vec<_> = self.space.outputs().cloned().collect();
+        for output in &outputs {
+            let mut map = smithay::desktop::layer_map_for_output(output);
+            if map
+                .layer_for_surface(surface, smithay::desktop::WindowSurfaceType::ALL)
+                .is_some()
+            {
+                map.arrange();
+                if let Some(layer) = map.layer_for_surface(
+                    surface,
+                    smithay::desktop::WindowSurfaceType::ALL,
+                ) {
+                    layer.layer_surface().send_pending_configure();
+                }
+                self.pending_redraw = true;
+            }
+        }
 
         // A client submitted new buffer content: mark the output dirty. The
         // udev render pump picks this up within one frame interval and

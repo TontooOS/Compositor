@@ -14,35 +14,57 @@ const DEFAULT_HEIGHT: i32 = 500;
 
 impl XdgDecorationHandler for TontooCompositor {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
-        // CSD: compositor no longer draws a topbar/titlebar — each app draws its own.
-        // Advertise ClientSide so GTK/Qt will use client-side decorations.
+        // Default to ClientSide (GTK/Qt apps always draw their own header),
+        // unless the app is on the SSD enforcement list (Chrome, Firefox,
+        // VSCode draw foreign headers — the compositor bar replaces them).
+        let mode = self.ssd_mode_for(&toplevel);
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(Mode::ClientSide);
+            state.decoration_mode = Some(mode);
             state.size = Some(Size::from((DEFAULT_WIDTH, DEFAULT_HEIGHT)));
         });
         toplevel.send_configure();
     }
 
     fn request_mode(&mut self, toplevel: ToplevelSurface, mode: Mode) {
-        // Always prefer ClientSide — compositor does not provide server decorations.
-        // If the client explicitly requests ServerSide we still give ClientSide
-        // (apps must draw their own header bar).
-        let _ = mode; // ignored — force CSD
-        let effective = Mode::ClientSide;
+        // Enforce ServerSide for known foreign-header apps no matter what
+        // they request; honor everyone else (KWin-style negotiation).
+        let enforced = self.ssd_mode_for(&toplevel);
+        let effective = if enforced == Mode::ServerSide {
+            Mode::ServerSide
+        } else {
+            mode
+        };
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(effective);
-            // No extra server-side size reservation needed; client includes its
-            // own header in its buffer.
         });
         toplevel.send_configure();
     }
 
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        // No client preference: fall back to the enforced/default mode.
+        let mode = self.ssd_mode_for(&toplevel);
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(Mode::ClientSide);
+            state.decoration_mode = Some(mode);
         });
         toplevel.send_configure();
     }
 }
 
-smithay::delegate_xdg_decoration!(TontooCompositor);
+impl TontooCompositor {
+    /// Decoration mode for a toplevel: `ServerSide` when its app ID is on
+    /// the enforcement list, `ClientSide` otherwise. Unknown windows
+    /// (not yet mapped) fall back to `ClientSide`.
+    fn ssd_mode_for(&self, toplevel: &ToplevelSurface) -> Mode {
+        let forced = self.space.elements().find_map(|window| {
+            let candidate = window.toplevel()?;
+            if candidate.wl_surface() != toplevel.wl_surface() {
+                return None;
+            }
+            crate::state::get_app_id(window)
+        });
+        match forced {
+            Some(id) if crate::shell::ssd::forces_ssd(&id) => Mode::ServerSide,
+            _ => Mode::ClientSide,
+        }
+    }
+}

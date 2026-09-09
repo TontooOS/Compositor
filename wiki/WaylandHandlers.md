@@ -105,8 +105,11 @@ Unconstrains a popup to the output geometry.
 
 ## XdgDecorationHandler
 
-The compositor now uses **Client-Side Decorations (CSD)**. Each app draws its
-own header bar (traffic lights + title).
+The compositor defaults to **Client-Side Decorations (CSD)** so GTK/Qt
+apps draw their own MacTahoe header, but honors explicit client requests
+(KWin-style negotiation). A client that requests `ServerSide` (Chrome
+with "Use system title bar", VSCode with native title bar) gets a
+compositor-drawn traffic-light titlebar, see [WindowControls.md](WindowControls.md).
 
 ### new_decoration
 
@@ -114,17 +117,25 @@ own header bar (traffic lights + title).
 fn new_decoration(&mut self, toplevel: ToplevelSurface)
 ```
 
-Sets the decoration mode to `ClientSide` with a default size of 800x500.
+Sets the decoration mode to `ClientSide` with a default size of 800x500,
+except for apps on the SSD enforcement list (always `ServerSide`).
 
 ### request_mode
 
-Always returns `ClientSide`. Even if a client requests `ServerSide`, the
-compositor forces `ClientSide` — apps must render their own decorations.
+```rust
+fn request_mode(&mut self, toplevel: ToplevelSurface, mode: Mode)
+```
+
+Honors the requested mode and sends a configure, except for apps on the
+SSD enforcement list (`shell::ssd::FORCE_SSD_APP_IDS`: Chrome, Firefox,
+VSCode and friends draw foreign headers, so they always get
+`ServerSide`). `ServerSide` activates the compositor titlebar;
+`ClientSide` keeps app-drawn decorations.
 
 ### unset_mode
 
-Sets the decoration mode to `ClientSide` and sends a configure (previously
-cleared the mode).
+Falls back to the enforced/default mode (`ServerSide` for listed apps,
+`ClientSide` otherwise) and sends a configure.
 
 ## WlrLayerShellHandler
 
@@ -147,6 +158,17 @@ no output is available.
 
 Unmaps the destroyed layer surface from the layer map.
 
+### Layer configure cycle (`CompositorHandler::commit`)
+
+The smithay delegate never configures layer surfaces on its own, so the
+commit handler drives the cycle: when a layer surface commits, the layer
+map re-arranges with the new size and `send_pending_configure` proposes
+the arranged size back. Without this the client waits for its initial
+configure forever (seen with `Menubar.app`: it committed `0x200` and
+stayed invisible). Rendering picks the surfaces up via
+`render_elements_from_surface_tree` at the arranged
+`layer_geometry` (see [Rendering.md](Rendering.md)).
+
 ## Delegate Macros
 
 ```rust
@@ -164,5 +186,5 @@ smithay::delegate_layer_shell!(TontooCompositor);
 
 - [State.md](State.md) -- handler implementations access `TontooCompositor` state
 - [Grabs.md](Grabs.md) -- move/resize requests create pointer grabs (clients drive move via CSD)
-- [WindowControls.md](WindowControls.md) -- helper for apps (compositor no longer handles `send_close`)
-- [Rendering.md](Rendering.md) -- now CSD, only shadow + border from compositor
+- [WindowControls.md](WindowControls.md) -- SSD titlebar rendering and traffic-light actions
+- [Rendering.md](Rendering.md) -- CSD windows draw their own header; SSD windows get a compositor bar

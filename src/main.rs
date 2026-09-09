@@ -14,12 +14,16 @@ mod texture_cache;
 mod wallpaper;
 pub mod widget_renderer;
 pub mod widget_tree;
+mod windows_ipc;
 
 #[cfg(feature = "winit")]
 mod render;
 
 #[cfg(feature = "udev")]
 mod udev;
+
+#[cfg(feature = "udev")]
+mod xwayland;
 
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 
@@ -70,6 +74,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let display: Display<TontooCompositor> = Display::new()?;
 
     let mut state = TontooCompositor::new(&mut event_loop, display);
+
+    // Window listing + actions for CoreWindows (Dock, Mission Control).
+    // A bind failure is not fatal: the desktop runs without IPC.
+    if let Err(e) = windows_ipc::init(&mut event_loop) {
+        tracing::warn!("windows-ipc unavailable: {:?}", e);
+    }
 
     if use_udev {
         #[cfg(feature = "udev")]

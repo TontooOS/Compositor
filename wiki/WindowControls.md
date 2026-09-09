@@ -3,12 +3,72 @@
 The window controls module implements macOS-style traffic light buttons
 (close, minimize, maximize) rendered in the top-left corner of each window.
 
-> **Note (CSD):** Since the compositor now uses Client-Side Decorations,
-> the compositor no longer renders traffic lights or a titlebar itself.
-> `WindowControls` is kept as a **helper library for apps** — apps that want
-> a native macOS look can reuse `DOT_SIZE`, `close_color`, and the pixel
-> generation helpers to draw their own header. The compositor's `Input`
-> and `Rendering` pipelines no longer reference it directly.
+GTK/Qt apps use client-side decorations and draw their own MacTahoe
+header. Windows that negotiate `ServerSide` via xdg-decoration (Chrome
+with "Use system title bar", VSCode with native title bar) get a
+compositor-drawn titlebar from the `shell::ssd` module below, which
+reuses the geometry and pixel helpers documented here.
+
+## Server-Side Decorations (`shell::ssd`)
+
+| Item | Value |
+|---|---|
+| `BAR_HEIGHT` | 32 |
+| `TOP_STRUT` | 30.0 (reserved for the external Menubar.app) |
+| Bar background Dark | `#1d1d1d` |
+| Bar background Light | `#ececec` |
+
+The bar is drawn directly above the window content. Maximized and
+top-edge windows keep full content (no bar is drawn when there is no
+room above the window).
+
+### is_ssd
+
+```rust
+pub fn is_ssd(window: &Window) -> bool
+```
+
+Returns `true` when the window negotiated `ServerSide` and acked the
+configure. CSD windows return `false` and are never touched.
+
+### bar_rect
+
+```rust
+pub fn bar_rect(geo: Rectangle<i32, Logical>) -> Option<Rectangle<f32, Logical>>
+```
+
+Computes the bar rectangle above the given window geometry. Returns
+`None` when the bar would overlap the top strut.
+
+### push_ssd_elements
+
+Pushes the bar background, traffic-light dots, hover symbols and the
+centered title into the render list. Shared by the winit and udev
+backends.
+
+### Actions
+
+| Action | Behavior |
+|---|---|
+| Close | `send_close` to the client |
+| Maximize | Toggles the maximized state; restores the previous geometry on toggle-off |
+| Minimize | Unmaps the window and pins a temporary dock icon (macOS behavior); clicking the icon restores the window |
+| Bar background drag | Starts a `MoveSurfaceGrab` |
+
+Default app configuration ships system title bars out of the box:
+Chrome via `browser.custom_chrome_frame=false` in the skeleton
+`Preferences`, VSCode via `window.titleBarStyle=native` in the
+skeleton `settings.json`. Firefox keeps its userChrome.css traffic
+lights from the skeleton profile at `/etc/skel/.mozilla/firefox`
+(native Firefox reads `~/.mozilla`, not `~/.config`).
+
+### Known limitations
+
+- Overlapping SSD windows: bars render above all window content, so a
+  lower window bar can overlap an upper window.
+- No SSD bar on maximized windows (traffic lights unreachable there).
+- Restoring a minimized window whose client already exited drops the
+  entry instead.
 
 ## Constants
 
@@ -116,7 +176,7 @@ Returns dark semi-transparent RGBA pixels on a transparent background.
 
 ## Cross References
 
-- [Shell.md](Shell.md) -- `ShellState::window_controls` map (kept, unused by compositor)
-- [Rendering.md](Rendering.md) -- previously rendered in the titlebar area; now CSD (apps render)
-- [Input.md](Input.md) -- previous traffic light click/hover; now handled by clients
-- [WaylandHandlers.md](WaylandHandlers.md) -- decoration now `ClientSide`
+- [Shell.md](Shell.md) -- `ShellState::window_controls` hover map
+- [Rendering.md](Rendering.md) -- CSD windows draw their own header; SSD bars render above content
+- [Input.md](Input.md) -- SSD bar clicks, drag grabs, dock minimize/restore
+- [WaylandHandlers.md](WaylandHandlers.md) -- decoration negotiation (`ClientSide` default, honors `ServerSide`)

@@ -39,6 +39,8 @@ rendered here; it is the external `Menubar.app` system app (see
 | RenderCache | [RenderCache.md](RenderCache.md) | Cached compositor textures |
 | TextureCache | [TextureCache.md](TextureCache.md) | Content-hashed GPU texture cache |
 | UdevBackend | [UdevBackend.md](UdevBackend.md) | Udev/DRM/libseat backend |
+| XWayland | [XWayland.md](XWayland.md) | X11 apps via embedded XWayland server + window manager |
+| WindowsIpc | [WindowsIpc.md](WindowsIpc.md) | CoreWindows socket: window listing and actions |
 | Shaders | [Shaders.md](Shaders.md) | Gaussian blur GLSL shaders |
 
 ## Quick Start
@@ -67,6 +69,52 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-09: Windows IPC socket for CoreWindows (`src/windows_ipc.rs`,
+  `/run/tontoo-windows.sock`, `WINDOWS_SOCKET` override): `ping`,
+  `list_windows` (mapped + minimized, with app id/title/pid), minimize
+  (reuses SSD minimize-to-dock), fullscreen set/unset (geometry saved
+  and restored), graceful close (`send_close` / `WM_DELETE_WINDOW`).
+  Stable per-surface window ids, non-fatal bind, both backends. See
+  [WindowsIpc.md](WindowsIpc.md).
+- 2026-09-08: Ported to smithay git master (pinned rev `d4bb0de`, pre-0.8.0):
+  all `delegate_*` macros replaced by `delegate_dispatch2!`, new
+  `RenderElement::draw` cache param, `InputTime` instead of `time_msec`,
+  `NodeFilter::None` for the GBM exporter, `PhysicalProperties`
+  `serial_number`, new `XWayland::spawn`/`start_wm` signatures, empty
+  `WaylandDndGrabHandler`/`DndGrabHandler`/`PointerConstraintsHandler`
+  impls, `with_committed_state` instead of `ToplevelSurface::current_state`.
+  Backup of the 0.7 tree at `../compositor-0.7-backup-20260908`.
+- 2026-09-08: Layer-shell bars render (Menubar.app): the render pump
+  composites Top/Overlay layer surfaces above windows and
+  Background/Bottom below (both backends), and `CompositorHandler::commit`
+  re-arranges the layer map plus `send_pending_configure` on layer commits
+  (without it clients wait for the initial configure forever). Menubar runs
+  with `GDK_BACKEND=wayland` + `gtk4-layer-shell` (Top anchors, 36px
+  exclusive zone). See [Menubar.md](Menubar.md), [WaylandHandlers.md](WaylandHandlers.md).
+- 2026-09-08: X11 panic-safety: `client_compositor_state` serves the
+  XWayland-internal client's own state (smithay inserts
+  `XWaylandClientData`, not `ClientState`) with a static fallback instead
+  of unwrapping; `state::window_wl_surface_any` replaces all
+  `.toplevel().unwrap()` space scans (X11 windows have no xdg toplevel).
+  Fixed a crash-loop once XWayland actually started. See
+  [XWayland.md](XWayland.md).
+- 2026-09-07: Added XWayland support (udev backend): embedded Xwayland server (`XWAYLAND_NO_GLAMOR=1`), `X11Wm` window manager mapping X11 top-levels into `Space`, `DISPLAY` export, X11-aware click focus. See [XWayland.md](XWayland.md).
+
+- 2026-09-07: Enforce SSD for foreign-header apps — new
+  `shell::ssd::FORCE_SSD_APP_IDS` list (Chrome, Firefox, VSCode);
+  `new_decoration`, `request_mode` and `unset_mode` always answer
+  `ServerSide` for listed app IDs, so no per-app setup is needed.
+  Also removed a duplicate unconditional `mod udev` in `main.rs`.
+- 2026-09-07: Server-side decorations for foreign apps — `request_mode`
+  now honors client requests (KWin-style) instead of forcing CSD; new
+  shared `shell::ssd` module renders a traffic-light titlebar (Dark
+  `#1d1d1d` / Light `#ececec`) for SSD windows on both winit and udev
+  backends; close/maximize/minimize/drag work on the bar, minimize pins
+  a temporary dock icon for restore; Chrome seeded with
+  `browser.custom_chrome_frame=false` and VSCode with
+  `window.titleBarStyle=native` via `/etc/skel`. See
+  [WindowControls.md](WindowControls.md) and
+  [WaylandHandlers.md](WaylandHandlers.md).
 - 2026-09-07: Fix traffic lights and theme toggle — traffic lights
   (`button-layout`, `gtk-decoration-layout`) are fixed once and no longer
   switch; only `gtk-theme` and `color-scheme` toggle via

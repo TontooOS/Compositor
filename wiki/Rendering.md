@@ -34,11 +34,13 @@ On each `Redraw` event:
 4. Bind the framebuffer.
 5. Build the render element list in z-order:
    - Wallpaper (bottommost)
+   - Background/Bottom layer-shell surfaces
    - Window shadows (improved 3-layer shadow)
    - Client windows (`Space`) — CSD: windows include their own header bar
    - Window border + rounded-corner mask
    - TontooUI surfaces
    - Dock glass panel + icons + running-app dots
+   - Top/Overlay layer-shell surfaces (e.g. `Menubar.app`)
    - Cursor (topmost)
 6. Submit the frame with damage tracking.
 7. Send frame callbacks to windows and layer surfaces.
@@ -54,12 +56,14 @@ The winit backend pushes elements bottom-to-top (the renderer composites
 back-to-front):
 
 1. `Wallpaper`
-2. `WindowShadow` (3-layer shadow with vertical bias)
+2. Background/Bottom layer-shell surfaces
+3. `WindowShadow` (3-layer shadow with vertical bias)
 3. `Space` (client windows, CSD)
 4. `WindowBorder`
 5. `TontooUi`
 6. `DockBar`
-7. `CursorTexture` / `CursorSurface`
+7. Top/Overlay layer-shell surfaces (e.g. `Menubar.app`)
+8. `CursorTexture` / `CursorSurface`
 
 > **Note:** The top bar is not rendered here. It is the external
 > `Menubar.app` system app (see [Menubar.md](Menubar.md)); the compositor
@@ -71,12 +75,14 @@ The DRM compositor uses front-to-back ordering. Elements are pushed in
 reverse and the cursor is inserted at index 0:
 
 1. `CursorTexture` / `CursorSurface` (index 0, inserted last)
-2. `DockBar`
+2. Top/Overlay layer-shell surfaces (e.g. `Menubar.app`)
+3. `DockBar`
 3. `WindowBorder`
 4. `Space` (CSD)
 5. `TontooUi`
 6. `WindowShadow`
-7. `Wallpaper` (pushed last, rendered bottommost)
+7. Background/Bottom layer-shell surfaces
+8. `Wallpaper` (pushed last, rendered bottommost)
 
 ## Window Decorations
 

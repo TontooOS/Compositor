@@ -1,5 +1,11 @@
 use crate::protocol;
-use std::{ffi::OsString, os::unix::fs::PermissionsExt, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::OsString,
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use smithay::{
     desktop::{layer_map_for_output, PopupManager, Space, Window, WindowSurfaceType},
@@ -85,6 +91,34 @@ pub struct TontooCompositor {
     /// The currently focused window surface (for 2-click behavior and active app tracking).
     pub focused_surface: Option<WlSurface>,
 
+    /// Windows minimized to the dock as (display name, window) pairs.
+    /// Clicking the matching dock icon restores the window.
+    pub minimized_windows: Vec<(String, Window)>,
+
+    /// Dock icon names pinned temporarily for minimized windows.
+    /// Removed again when the window is restored.
+    pub minimized_icons: HashSet<String>,
+
+    /// Pre-maximize geometry for SSD maximize toggles, keyed by surface id.
+    pub maximized_restore: HashMap<
+        smithay::reexports::wayland_server::backend::ObjectId,
+        Rectangle<i32, Logical>,
+    >,
+
+    /// Pre-fullscreen geometry for windows-ipc fullscreen toggles, keyed
+    /// by surface id. Restored on unfullscreen.
+    pub fullscreen_restore: HashMap<
+        smithay::reexports::wayland_server::backend::ObjectId,
+        Rectangle<i32, Logical>,
+    >,
+
+    /// Stable daemon-side window ids for windows-ipc (`list_windows` and
+    /// actions), keyed by surface id. Pruned on every listing.
+    pub window_ids: HashMap<smithay::reexports::wayland_server::backend::ObjectId, u64>,
+
+    /// Next id to hand out in `window_ids`.
+    pub next_window_id: u64,
+
     /// Cached render textures to avoid recomputing every frame.
     pub render_cache: RenderCache,
 
@@ -97,6 +131,14 @@ pub struct TontooCompositor {
 
     #[cfg(feature = "udev")]
     pub udev_data: Option<crate::udev::UdevData>,
+
+    /// XWayland server + window-manager state (udev backend only).
+    #[cfg(feature = "udev")]
+    pub xwayland_state: crate::xwayland::XWaylandState,
+
+    /// Wayland protocol state for the XWayland shell global.
+    #[cfg(feature = "udev")]
+    pub xwayland_shell_state: smithay::wayland::xwayland_shell::XWaylandShellState,
 }
 
 impl TontooCompositor {
@@ -119,6 +161,10 @@ impl TontooCompositor {
         );
 
         let xdg_decoration_state = XdgDecorationState::new::<TontooCompositor>(&dh);
+
+        #[cfg(feature = "udev")]
+        let xwayland_shell_state =
+            smithay::wayland::xwayland_shell::XWaylandShellState::new::<TontooCompositor>(&dh);
 
         let mut seat_state = SeatState::new();
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, "seat0");
@@ -171,8 +217,7 @@ impl TontooCompositor {
             data_device_state,
             xdg_decoration_state,
             popups,
-            seat,
-            color_scheme,
+            seat,            color_scheme,
             accessibility,
             cursor: CursorState::new(color_scheme),
             wallpaper,
@@ -184,11 +229,21 @@ impl TontooCompositor {
             shell: ShellState::new(),
             tontoo_ui: TontooUiState::default(),
             focused_surface: None,
+            minimized_windows: Vec::new(),
+            minimized_icons: HashSet::new(),
+            maximized_restore: HashMap::new(),
+            fullscreen_restore: HashMap::new(),
+            window_ids: HashMap::new(),
+            next_window_id: 1,
             render_cache,
             pending_redraw: false,
             last_render: start_time,
             #[cfg(feature = "udev")]
             udev_data: None,
+            #[cfg(feature = "udev")]
+            xwayland_state: crate::xwayland::XWaylandState::default(),
+            #[cfg(feature = "udev")]
+            xwayland_shell_state,
         }
     }
 
@@ -357,4 +412,33 @@ pub fn get_window_title(window: &Window) -> Option<String> {
         let data = states.data_map.get::<XdgToplevelSurfaceData>()?;
         data.lock().ok()?.title.clone()
     })
+}
+
+/// `WlSurface` backing a mapped window, Wayland or X11.
+///
+/// `Window::toplevel()` returns `None` for X11 windows, so any direct
+/// `.toplevel().unwrap()` on space elements panics as soon as an X11 window
+/// is mapped. Use this helper for all surface comparisons instead.
+pub fn window_wl_surface_any(window: &Window) -> Option<WlSurface> {
+    #[cfg(feature = "udev")]
+    {
+        return crate::xwayland::window_wl_surface(window);
+    }
+    #[cfg(not(feature = "udev"))]
+    {
+        return window.toplevel().map(|t| t.wl_surface().clone());
+    }
+}
+
+/// Display name of a mapped window: Wayland app-id/title first, then the
+/// X11 title/class on backends with XWayland support.
+pub fn window_app_name(window: &Window) -> Option<String> {
+    if let Some(name) = get_app_id(window).or_else(|| get_window_title(window)) {
+        return Some(name);
+    }
+    #[cfg(feature = "udev")]
+    if let Some(name) = crate::xwayland::x11_app_name(window) {
+        return Some(name);
+    }
+    None
 }

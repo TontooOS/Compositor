@@ -14,12 +14,14 @@ use smithay::{
         drm::exporter::gbm::GbmFramebufferExporter,
         drm::{
             compositor::{DrmCompositor, FrameFlags, PrimaryPlaneElement},
+            exporter::gbm::NodeFilter,
             DrmDevice, DrmDeviceFd, DrmEvent, DrmNode,
         },
         egl::{EGLContext, EGLDisplay},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
             element::{
+                surface::render_elements_from_surface_tree,
                 texture::{TextureBuffer, TextureRenderElement},
                 Kind,
             },
@@ -41,6 +43,7 @@ use smithay::{
         wayland_server::DisplayHandle,
     },
     utils::{Clock, DeviceFd, IsAlive, Monotonic, Physical, Point, Rectangle, Size, Transform},
+    wayland::shell::wlr_layer::Layer as WlrLayer,
 };
 
 use crate::cursor::{
@@ -251,6 +254,12 @@ pub fn init_udev(
         })?;
 
     tracing::info!("Udev backend initialized");
+
+    // XWayland for X11 apps (xterm, …). Best-effort: a missing Xwayland
+    // binary only logs, the Wayland desktop keeps working.
+    if let Err(err) = crate::xwayland::start_xwayland(event_loop, state) {
+        tracing::warn!("XWayland unavailable: {err:?}");
+    }
     Ok(())
 }
 
@@ -476,7 +485,7 @@ fn scan_connectors(
                 device.gbm.clone(),
                 GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
             );
-            let exporter = GbmFramebufferExporter::new(device.gbm.clone(), None);
+            let exporter = GbmFramebufferExporter::new(device.gbm.clone(), NodeFilter::None);
             let compositor = DrmCompositor::new(
                 &output,
                 surface,
@@ -560,6 +569,7 @@ fn create_output_for_connector(
             subpixel: Subpixel::Unknown,
             make: "Unknown".into(),
             model: "Unknown".into(),
+            serial_number: "".into(),
         },
     );
 
@@ -637,6 +647,8 @@ pub fn try_render_all(state: &mut TontooCompositor) {
     let active_app = &state.shell.dock.active_app;
     let render_cache = &mut state.render_cache;
     let tontoo_ui = &state.tontoo_ui;
+    let window_controls = &mut state.shell.window_controls;
+    let color_scheme = state.color_scheme;
 
     let Some(udev) = state.udev_data.as_mut() else {
         return;
@@ -661,7 +673,8 @@ pub fn try_render_all(state: &mut TontooCompositor) {
                 render_cache,
                 tontoo_ui,
                 state.focused_surface.as_ref(),
-                &state.shell.window_controls,
+                window_controls,
+                color_scheme,
             ) {
                 tracing::error!("render_surface failed: {:?}", e);
             }
@@ -988,63 +1001,7 @@ fn create_window_border_mask_texture(
     ).ok()
 }
 
-fn create_window_titlebar_texture(
-    renderer: &mut GlesRenderer,
-    win_w: i32,
-    color_scheme: crate::config::ColorScheme,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let tw = win_w as u32;
-    let th = crate::config::TITLEBAR_HEIGHT as u32;
-    if tw == 0 {
-        return None;
-    }
-    let mut data = vec![0u8; (tw * th * 4) as usize];
-
-    // Glass / translucent titlebar with rounded top corners
-    let corner_r: f32 = 10.0;
-    let milkiness: f32 = 0.65;
-    let (bg_r, bg_g, bg_b) = match color_scheme {
-        crate::config::ColorScheme::Dark => (29u8, 29u8, 29u8),
-        crate::config::ColorScheme::Light => (236u8, 236u8, 236u8),
-    };
-
-    for y in 0..th {
-        for x in 0..tw {
-            let i = ((y * tw + x) * 4) as usize;
-            // Rounded top corners
-            let alpha = if (x as f32) < corner_r && (y as f32) < corner_r {
-                let dx = corner_r - x as f32;
-                let dy = corner_r - y as f32;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist > corner_r { 0.0 } else { 1.0 - (1.0 - dist / corner_r).powf(1.5) }
-            } else if (x as f32) >= tw as f32 - corner_r && (y as f32) < corner_r {
-                let dx = x as f32 - (tw as f32 - corner_r);
-                let dy = corner_r - y as f32;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist > corner_r { 0.0 } else { 1.0 - (1.0 - dist / corner_r).powf(1.5) }
-            } else {
-                1.0
-            };
-            let a = (alpha * 180.0 * milkiness) as u8; // translucent
-            data[i]     = bg_b;
-            data[i + 1] = bg_g;
-            data[i + 2] = bg_r;
-            data[i + 3] = a;
-        }
-    }
-
-    TextureBuffer::from_memory(
-        renderer,
-        &data,
-        Fourcc::Abgr8888,
-        (win_w, crate::config::TITLEBAR_HEIGHT),
-        false,
-        1,
-        Transform::Normal,
-        None,
-    )
-    .ok()
-}
+// (Server-side titlebar textures live in `shell::ssd`, shared by both backends.)
 
 /// Derive ColorScheme from clear_color (reverse of ColorScheme::clear_color).
 fn clear_color_to_scheme(clear_color: [f32; 4]) -> crate::config::ColorScheme {
@@ -1229,8 +1186,9 @@ fn render_surface(
     active_app: &Option<String>,
     render_cache: &mut crate::render_cache::RenderCache,
     tontoo_ui: &crate::handlers::tontoo_ui::TontooUiState,
-    _focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
-    _window_controls: &std::collections::HashMap<String, crate::shell::window_controls::WindowControls>,
+    focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
+    window_controls: &mut std::collections::HashMap<String, crate::shell::window_controls::WindowControls>,
+    color_scheme: crate::config::ColorScheme,
 ) -> Result<(), SwapBuffersError> {
     let output = &surface.output;
     let output_geo = space.output_geometry(output).unwrap_or_default();
@@ -1360,9 +1318,37 @@ fn render_surface(
         }
     }
 
-    // Top strut: reserved for the external Menubar.app system app.
-    // The compositor renders nothing here; windows are placed below the
-    // strut (see handlers/xdg_shell.rs).
+    // Top strut: reserved for the external Menubar.app system app, drawn
+    // below as a Top-layer surface. Windows are placed below the strut
+    // (see handlers/xdg_shell.rs).
+
+    // Layer-shell surfaces above windows (Top/Overlay layers, e.g. the
+    // Menubar top bar). Pushed before the window batch so they render
+    // above normal windows and below the cursor.
+    {
+        let map = layer_map_for_output(output);
+        for layer_surface in map.layers() {
+            if !matches!(
+                layer_surface.layer(),
+                WlrLayer::Top | WlrLayer::Overlay
+            ) {
+                continue;
+            }
+            let Some(geo) = map.layer_geometry(layer_surface) else {
+                continue;
+            };
+            // CursorSurface is the generic wl_surface element variant.
+            let elems: Vec<TontooRenderElements> = render_elements_from_surface_tree(
+                renderer,
+                layer_surface.wl_surface(),
+                Point::<i32, Physical>::from((geo.loc.x, geo.loc.y)),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            );
+            all_elements.extend(elems);
+        }
+    }
 
     // 2. Client windows + decorations (CSD: shadow + border only, no server titlebar)
     // DRM renders front-to-back: push order = [topmost, ..., bottommost]
@@ -1397,8 +1383,34 @@ fn render_surface(
         //     }
         // }
 
-        // NOTE: Server-side titlebar removed — Client-Side Decorations (CSD) only.
-        // Windows (middle layer) — apps include their own header bar
+        // Server-side titlebars for SSD windows (Chrome/VSCode with system
+        // title bar). Pushed before the window batch: DRM renders front to
+        // back, so bars land above their windows. CSD windows draw their
+        // own header; maximized windows keep full content.
+        for window in space.elements() {
+            if !crate::shell::ssd::is_ssd(window) {
+                continue;
+            }
+            if crate::shell::ssd::is_maximized(window) {
+                continue;
+            }
+            if let Some(geo) = space.element_geometry(window) {
+                let title = crate::state::get_window_title(window);
+                crate::shell::ssd::push_ssd_elements(
+                    renderer,
+                    render_cache,
+                    window_controls,
+                    focused_surface,
+                    color_scheme,
+                    window,
+                    geo,
+                    title,
+                    &mut all_elements,
+                );
+            }
+        }
+
+        // Windows (middle layer) — CSD apps include their own header bar
         for elem in space_elements {
             all_elements.push(TontooRenderElements::Space(elem));
         }
@@ -1474,6 +1486,33 @@ fn render_surface(
         //         }
         //     }
         // }
+    }
+
+    // Layer-shell surfaces below windows (Background/Bottom layers).
+    // Pushed before the wallpaper so they render just above it.
+    {
+        let map = layer_map_for_output(output);
+        for layer_surface in map.layers() {
+            if !matches!(
+                layer_surface.layer(),
+                WlrLayer::Background | WlrLayer::Bottom
+            ) {
+                continue;
+            }
+            let Some(geo) = map.layer_geometry(layer_surface) else {
+                continue;
+            };
+            // CursorSurface is the generic wl_surface element variant.
+            let elems: Vec<TontooRenderElements> = render_elements_from_surface_tree(
+                renderer,
+                layer_surface.wl_surface(),
+                Point::<i32, Physical>::from((geo.loc.x, geo.loc.y)),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            );
+            all_elements.extend(elems);
+        }
     }
 
     // 2. Wallpaper (bottommost, pushed last)

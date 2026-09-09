@@ -5,16 +5,24 @@ use smithay::{
     },
     input::{
         keyboard::FilterResult,
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
+        pointer::{
+            AxisFrame, ButtonEvent, Focus, GrabStartData as PointerGrabStartData, MotionEvent,
+        },
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
     utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
 };
 
-use crate::state::{get_app_id, get_window_title};
+use crate::grabs::MoveSurfaceGrab;
+use crate::shell::window_controls::TrafficLightAction;
+use crate::state::window_app_name;
 use crate::TontooCompositor;
 
 const KEY_ENTER: u32 = 28;
+
+/// Left mouse button (evdev). Only this button triggers SSD titlebar
+/// actions and window drags.
+const BTN_LEFT: u32 = 0x110;
 
 // Function keys F1-F12 in evdev key codes (libinput)
 const KEY_F1: u32 = 59;
@@ -25,7 +33,7 @@ impl TontooCompositor {
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
-                let time = Event::time_msec(&event);
+                let time = event.time();
 
                 let keyboard = self.seat.get_keyboard().unwrap();
 
@@ -108,6 +116,7 @@ impl TontooCompositor {
                 self.cursor.update_speed(new_pos);
                 self.update_dock_hover(new_pos);
                 self.update_tontoo_ui_hover(new_pos);
+                self.update_ssd_hover(new_pos);
                 let under = self.surface_under(new_pos);
                 let pointer = self.seat.get_pointer().unwrap();
 
@@ -117,7 +126,7 @@ impl TontooCompositor {
                     &MotionEvent {
                         location: new_pos,
                         serial,
-                        time: event.time_msec(),
+                        time: event.time(),
                     },
                 );
                 pointer.frame(self);
@@ -137,6 +146,7 @@ impl TontooCompositor {
                 let serial = SERIAL_COUNTER.next_serial();
                 self.cursor.update_speed(pos);
                 self.update_dock_hover(pos);
+                self.update_ssd_hover(pos);
                 let under = self.surface_under(pos);
                 let pointer = self.seat.get_pointer().unwrap();
 
@@ -146,7 +156,7 @@ impl TontooCompositor {
                     &MotionEvent {
                         location: pos,
                         serial,
-                        time: event.time_msec(),
+                        time: event.time(),
                     },
                 );
                 pointer.frame(self);
@@ -163,33 +173,82 @@ impl TontooCompositor {
                     let pos_i = Point::from((pos.x as i32, pos.y as i32));
 
                     // ── 1. Dock icon clicks (always processed first) ──
-                    if let Some(output) = self.space.outputs().next() {
-                        if let Some(geo) = self.space.output_geometry(output) {
+                    // Hit test first with short-lived borrows, then act.
+                    let dock_hit: Option<String> = self
+                        .space
+                        .outputs()
+                        .next()
+                        .and_then(|o| self.space.output_geometry(o))
+                        .map(|geo| {
                             let sw = geo.size.w as f64;
                             let sh = geo.size.h as f64;
                             let icon_count = self.shell.dock.icons.len();
                             let rects = Self::dock_icon_rects(sw, sh, icon_count);
-                            for (idx, rect) in rects.iter().enumerate() {
-                                if rect.contains(pos_i) {
-                                    let icon_name = self.shell.dock.icons[idx].name.clone();
-                                    tracing::info!("Dock: '{}' clicked", icon_name);
-
-                                    // Bounce the icon
-                                    self.shell.dock.bounce_icon(&icon_name);
-                                    self.shell.dock.set_active_app(&icon_name);
-
-                                    // Launch the app
-                                    Self::launch_app_static(&icon_name);
-
-                                    // Mark icon as running
-                                    if let Some(icon) = self.shell.dock.icons.iter_mut().find(|i| i.name == icon_name) {
-                                        icon.is_running = true;
-                                    }
-
-                                    return;
+                            rects
+                                .iter()
+                                .enumerate()
+                                .find(|(_, rect)| rect.contains(pos_i))
+                                .map(|(idx, _)| self.shell.dock.icons[idx].name.clone())
+                        })
+                        .flatten();
+                    if let Some(icon_name) = dock_hit {
+                        // Restore a minimized window instead of launching
+                        // when a matching minimized window exists.
+                        if let Some(min_idx) = self
+                            .minimized_windows
+                            .iter()
+                            .position(|(n, _)| *n == icon_name)
+                        {
+                            let (name, window) = self.minimized_windows.remove(min_idx);
+                            let alive = window
+                                .toplevel()
+                                .map(|t| t.wl_surface().is_alive())
+                                .unwrap_or(false);
+                            if alive {
+                                tracing::info!("Dock: restoring minimized '{}'", name);
+                                let size = window.geometry().size;
+                                let loc = Self::center_on_output(&self.space, size);
+                                self.space.map_element(window.clone(), loc, true);
+                                self.space.raise_element(&window, true);
+                                let window_surface =
+                                    window.toplevel().unwrap().wl_surface().clone();
+                                keyboard.set_focus(
+                                    self,
+                                    Some(window_surface.clone()),
+                                    serial,
+                                );
+                                window.toplevel().unwrap().send_pending_configure();
+                                self.focused_surface = Some(window_surface);
+                                self.shell.dock.set_active_app(&name);
+                                if self.minimized_icons.remove(&name) {
+                                    self.shell.dock.remove_icon(&name);
                                 }
+                                self.pending_redraw = true;
+                                let _ = self.loop_signal.wakeup();
+                                return;
+                            }
+                            // Stale entry (client exited): drop the temp
+                            // icon and fall through to launching.
+                            if self.minimized_icons.remove(&name) {
+                                self.shell.dock.remove_icon(&name);
                             }
                         }
+
+                        tracing::info!("Dock: '{}' clicked", icon_name);
+
+                        // Bounce the icon
+                        self.shell.dock.bounce_icon(&icon_name);
+                        self.shell.dock.set_active_app(&icon_name);
+
+                        // Launch the app
+                        Self::launch_app_static(&icon_name);
+
+                        // Mark icon as running
+                        if let Some(icon) = self.shell.dock.icons.iter_mut().find(|i| i.name == icon_name) {
+                            icon.is_running = true;
+                        }
+
+                        return;
                     }
 
                     // ── 2. TontooUI surface clicks ──
@@ -228,9 +287,92 @@ impl TontooCompositor {
                         }
                     }
 
-                    // NOTE: Server-side titlebar/traffic lights removed — CSD mode.
-                    // Apps now draw their own decoration. Window move is handled via
-                    // xdg_toplevel move_request from the client (see handlers/xdg_shell.rs).
+                    // ── SSD titlebar clicks (traffic lights + drag) ──
+                    // Only for windows with negotiated server-side decorations
+                    // (Chrome/VSCode with system title bar). Topmost first so
+                    // overlapping windows resolve correctly.
+                    if !pointer.is_grabbed() && button == BTN_LEFT {
+                        let hit = self.space.elements().rev().find_map(|window| {
+                            let geo = self.space.element_geometry(window)?;
+                            if !crate::shell::ssd::is_ssd(window) {
+                                return None;
+                            }
+                            if crate::shell::ssd::is_maximized(window) {
+                                return None;
+                            }
+                            let bar = crate::shell::ssd::bar_rect(geo)?;
+                            let in_bar = pos.x >= bar.loc.x as f64
+                                && pos.x <= (bar.loc.x + bar.size.w) as f64
+                                && pos.y >= bar.loc.y as f64
+                                && pos.y <= (bar.loc.y + bar.size.h) as f64;
+                            if !in_bar {
+                                return None;
+                            }
+                            Some((window.clone(), geo, bar))
+                        });
+
+                        if let Some((window, geo, bar)) = hit {
+                            // Focus + raise like a normal window click.
+                            let window_surface =
+                                window.toplevel().unwrap().wl_surface().clone();
+                            self.space.raise_element(&window, true);
+                            keyboard.set_focus(self, Some(window_surface.clone()), serial);
+                            self.focused_surface = Some(window_surface.clone());
+                            let app_name = window_app_name(&window)
+                                .unwrap_or_else(|| "TontooOS".to_string());
+                                                        self.shell.dock.set_active_app(&app_name);
+
+                            match crate::shell::ssd::hit_test(bar, pos) {
+                                Some(action) => {
+                                    match action {
+                                        TrafficLightAction::Close => {
+                                            tracing::info!("SSD: close '{}'", app_name);
+                                            crate::shell::ssd::do_close(&window);
+                                        }
+                                        TrafficLightAction::Minimize => {
+                                            tracing::info!("SSD: minimize '{}'", app_name);
+                                            keyboard.set_focus(
+                                                self,
+                                                Option::<WlSurface>::None,
+                                                serial,
+                                            );
+                                            crate::shell::ssd::minimize_to_dock(
+                                                self,
+                                                &window,
+                                                app_name,
+                                            );
+                                        }
+                                        TrafficLightAction::Maximize => {
+                                            tracing::info!("SSD: maximize toggle '{}'", app_name);
+                                            crate::shell::ssd::toggle_maximize(self, &window);
+                                        }
+                                    }
+                                    self.pending_redraw = true;
+                                    let _ = self.loop_signal.wakeup();
+                                    return;
+                                }
+                                None => {
+                                    // Bar background: start a move drag.
+                                    let surf_loc = Point::from((
+                                        pos.x - geo.loc.x as f64,
+                                        pos.y - geo.loc.y as f64,
+                                    ));
+                                    let start_data = PointerGrabStartData {
+                                        focus: Some((window_surface, surf_loc)),
+                                        button,
+                                        location: pos,
+                                    };
+                                    let grab = MoveSurfaceGrab {
+                                        start_data,
+                                        window: window.clone(),
+                                        initial_window_location: geo.loc,
+                                    };
+                                    pointer.set_grab(self, grab, serial, Focus::Clear);
+                                    return;
+                                }
+                            }
+                        }
+                    }
 
                     // ── 2. Window clicks (2-click focus behavior) ──
                     if !pointer.is_grabbed() {
@@ -239,17 +381,39 @@ impl TontooCompositor {
                             .element_under(pointer.current_location())
                             .map(|(w, l)| (w.clone(), l))
                         {
-                            let window_surface = window.toplevel().unwrap().wl_surface().clone();
+                            // X11 windows have no xdg toplevel; use their wl
+                            // surface instead (udev backend with XWayland).
+                            #[cfg(feature = "udev")]
+                            let window_surface =
+                                crate::xwayland::window_wl_surface(&window);
+                            #[cfg(not(feature = "udev"))]
+                            let window_surface: Option<WlSurface> = window
+                                .toplevel()
+                                .map(|t| t.wl_surface().clone());
+                            let Some(window_surface) = window_surface else {
+                                // No focusable surface: forward the click.
+                pointer.button(
+                    self,
+                    &ButtonEvent {
+                        button,
+                        state: button_state,
+                        serial,
+                        time: event.time(),
+                    },
+                );
+                pointer.frame(self);
+                return;
+            };
                             let is_same_window = self.focused_surface.as_ref() == Some(&window_surface);
 
                             if is_same_window {
                                 // Second click on same window: pass click through to app
                                 tracing::debug!("Window second-click: passing through to '{}'",
-                                    get_app_id(&window).or_else(|| get_window_title(&window)).unwrap_or_default());
+                                    window_app_name(&window).unwrap_or_default());
                             } else {
                                 // First click on new window: focus it, don't pass click through
                                 tracing::info!("Window first-click: focusing '{}'",
-                                    get_app_id(&window).or_else(|| get_window_title(&window)).unwrap_or_default());
+                                    window_app_name(&window).unwrap_or_default());
 
                                 self.space.raise_element(&window, true);
                                 keyboard.set_focus(
@@ -258,15 +422,16 @@ impl TontooCompositor {
                                     serial,
                                 );
                                 self.space.elements().for_each(|w| {
-                                    w.toplevel().unwrap().send_pending_configure();
+                                    if let Some(toplevel) = w.toplevel() {
+                                        toplevel.send_pending_configure();
+                                    }
                                 });
 
                                 // Track focused surface
                                 self.focused_surface = Some(window_surface.clone());
 
                                 // Update dock active_app based on window app_id
-                                let app_name = get_app_id(&window)
-                                    .or_else(|| get_window_title(&window))
+                                let app_name = window_app_name(&window)
                                     .unwrap_or_else(|| "TontooOS".to_string());
                                 self.shell.dock.set_active_app(&app_name);
 
@@ -276,7 +441,9 @@ impl TontooCompositor {
                             // Clicked on empty space: deactivate everything
                             self.space.elements().for_each(|w| {
                                 w.set_activated(false);
-                                w.toplevel().unwrap().send_pending_configure();
+                                if let Some(toplevel) = w.toplevel() {
+                                    toplevel.send_pending_configure();
+                                }
                             });
                             keyboard.set_focus(self, Option::<WlSurface>::None, serial);
 
@@ -293,7 +460,7 @@ impl TontooCompositor {
                         button,
                         state: button_state,
                         serial,
-                        time: event.time_msec(),
+                        time: event.time(),
                     },
                 );
                 pointer.frame(self);
@@ -310,7 +477,7 @@ impl TontooCompositor {
                 let horizontal_amount_discrete = event.amount_v120(Axis::Horizontal);
                 let vertical_amount_discrete = event.amount_v120(Axis::Vertical);
 
-                let mut frame = AxisFrame::new(event.time_msec()).source(source);
+                let mut frame = AxisFrame::new(event.time()).source(source);
                 if horizontal_amount != 0.0 {
                     frame = frame.value(Axis::Horizontal, horizontal_amount);
                     if let Some(discrete) = horizontal_amount_discrete {
@@ -453,6 +620,53 @@ impl TontooCompositor {
                 tracing::warn!("Unknown app: {}", other);
             }
         }
+    }
+
+    /// Track pointer hover over SSD titlebars for traffic-light symbols.
+    fn update_ssd_hover(&mut self, pos: Point<f64, Logical>) {
+        let mut changed = false;
+        for window in self.space.elements() {
+            if !crate::shell::ssd::is_ssd(window) {
+                continue;
+            }
+            let Some(geo) = self.space.element_geometry(window) else {
+                continue;
+            };
+            let Some(bar) = crate::shell::ssd::bar_rect(geo) else {
+                continue;
+            };
+            let inside = pos.x >= bar.loc.x as f64
+                && pos.x <= (bar.loc.x + bar.size.w) as f64
+                && pos.y >= bar.loc.y as f64
+                && pos.y <= (bar.loc.y + bar.size.h) as f64;
+            let key = crate::shell::ssd::window_key(window);
+            let entry = self.shell.window_controls.entry(key).or_default();
+            if entry.hovered != inside {
+                entry.hovered = inside;
+                changed = true;
+            }
+        }
+        if changed {
+            self.pending_redraw = true;
+            let _ = self.loop_signal.wakeup();
+        }
+    }
+
+    /// Center a window of the given size on the primary output.
+    fn center_on_output(
+        space: &smithay::desktop::Space<smithay::desktop::Window>,
+        size: Size<i32, Logical>,
+    ) -> Point<i32, Logical> {
+        let (out_loc, out_size) = space
+            .outputs()
+            .next()
+            .and_then(|o| space.output_geometry(o))
+            .map(|g| (g.loc, g.size))
+            .unwrap_or((Point::from((0, 0)), Size::from((800, 600))));
+        Point::from((
+            out_loc.x + (out_size.w - size.w).max(0) / 2,
+            out_loc.y + (out_size.h - size.h).max(0) / 2,
+        ))
     }
 
     /// Track pointer hover over tontoo_ui surfaces and send widget_hovered events.

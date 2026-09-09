@@ -16,7 +16,7 @@ use smithay::{
     },
     input::pointer::{CursorImageStatus, CursorImageSurfaceData},
     reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
+    utils::{user_data::UserDataMap, Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
 };
 
 use smithay::backend::allocator::Fourcc;
@@ -47,8 +47,9 @@ impl RenderElement<GlesRenderer> for WallpaperElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), <GlesRenderer as smithay::backend::renderer::RendererSuper>::Error> {
-        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions)
+        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions, cache)
     }
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)
@@ -71,8 +72,9 @@ impl RenderElement<GlesRenderer> for CursorTextureElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), <GlesRenderer as smithay::backend::renderer::RendererSuper>::Error> {
-        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions)
+        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions, cache)
     }
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)
@@ -95,8 +97,9 @@ impl RenderElement<GlesRenderer> for DockBarElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), <GlesRenderer as smithay::backend::renderer::RendererSuper>::Error> {
-        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions)
+        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions, cache)
     }
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)
@@ -119,8 +122,9 @@ impl RenderElement<GlesRenderer> for WindowShadowElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), <GlesRenderer as smithay::backend::renderer::RendererSuper>::Error> {
-        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions)
+        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions, cache)
     }
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)
@@ -143,8 +147,9 @@ impl RenderElement<GlesRenderer> for WindowBorderElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), <GlesRenderer as smithay::backend::renderer::RendererSuper>::Error> {
-        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions)
+        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions, cache)
     }
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)
@@ -167,8 +172,9 @@ impl RenderElement<GlesRenderer> for WindowControlsElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), <GlesRenderer as smithay::backend::renderer::RendererSuper>::Error> {
-        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions)
+        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions, cache)
     }
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)
@@ -193,8 +199,9 @@ impl RenderElement<GlesRenderer> for WindowTitlebarElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), <GlesRenderer as smithay::backend::renderer::RendererSuper>::Error> {
-        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions)
+        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions, cache)
     }
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)
@@ -217,8 +224,9 @@ impl RenderElement<GlesRenderer> for TontooUiTextureElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), <GlesRenderer as smithay::backend::renderer::RendererSuper>::Error> {
-        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions)
+        <TextureRenderElement<GlesTexture> as RenderElement<GlesRenderer>>::draw(&self.0, frame, src, dst, damage, opaque_regions, cache)
     }
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)

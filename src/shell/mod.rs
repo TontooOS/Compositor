@@ -1,5 +1,6 @@
 pub mod dock;
 pub mod launcher;
+pub mod ssd;
 pub mod topbar;
 pub mod window_controls;
 
