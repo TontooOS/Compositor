@@ -57,9 +57,9 @@ machinery, so X11 windows behave like Wayland windows.
 `src/input.rs` resolves the focused surface via
 `xwayland::window_wl_surface` (xdg toplevel first, X11 `wl_surface`
 otherwise) instead of unwrapping `toplevel()`, which would panic on X11
-windows. `xwayland::x11_app_name` (X11 title, then class) extends the
-dock/menubar app-name chain, and `send_pending_configure` loops skip
-windows without an xdg toplevel.
+windows. `xwayland::x11_app_name` (X11 title, then class) extends the shell
+(`Dock.app` / `Menubar.app`) app-name chain, and `send_pending_configure`
+loops skip windows without an xdg toplevel.
 
 ## Panic Safety
 

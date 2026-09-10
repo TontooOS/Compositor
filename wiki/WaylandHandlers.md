@@ -52,10 +52,9 @@ fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>)
 ```
 
 Resets cursor visibility, updates the data device focus, and tracks the
-focused surface. Updates the dock `active_app` based on the focused
-window's `app_id` or title. When no window is focused, clears the active
-app. (The top bar is the external `Menubar.app`; the compositor holds no
-menubar state.)
+focused surface. (The top bar is the external `Menubar.app` and the
+bottom dock is the external `Dock.app`; the compositor holds neither
+menubar nor dock state.)
 
 ## Data Device
 

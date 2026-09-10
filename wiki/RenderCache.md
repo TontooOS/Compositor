@@ -1,7 +1,7 @@
 # RenderCache
 
 The render cache stores pre-generated GPU textures for compositor elements
-(dock, window decorations) so they do not need to be recomputed
+(window decorations) so they do not need to be recomputed
 every frame.
 
 ## TexBuf
@@ -16,8 +16,6 @@ Type alias for the GPU texture buffer.
 
 ```rust
 pub struct RenderCache {
-    pub dock_panel: Option<(i32, i32, ColorScheme, TexBuf)>,
-    pub dock_icons: HashMap<(String, ColorScheme, i32), TexBuf>,
     pub window_shadows: HashMap<(i32, i32, ColorScheme), TexBuf>, // improved 3-layer shadow
     pub window_borders: HashMap<(i32, i32, ColorScheme), TexBuf>,
     pub window_titlebars: HashMap<(i32, i32, ColorScheme), TexBuf>, // legacy, unused with CSD
@@ -68,8 +66,6 @@ or the window size changes.
 
 | Cache | Key | Notes |
 |---|---|---|
-| `dock_panel` | `(width, height, ColorScheme)` | |
-| `dock_icons` | `(name, ColorScheme, size)` | |
 | `window_shadows` | `(win_w, win_h, ColorScheme)` | 3-layer shadow |
 | `window_borders` | `(win_w, win_h, ColorScheme)` | |
 | `window_titlebars` | `(width, height, ColorScheme)` | legacy, unused (CSD) |

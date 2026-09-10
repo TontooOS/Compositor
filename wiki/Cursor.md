@@ -123,7 +123,7 @@ The module defines typed wrappers around `TextureRenderElement<GlesTexture>`
 for the compositor render element enum `TontooRenderElements`:
 
 `WallpaperElement`, `CursorTextureElement`,
-`DockBarElement`, `WindowShadowElement`, `WindowBorderElement`,
+`WindowShadowElement`, `WindowBorderElement`,
 `WindowControlsElement`, `WindowTitlebarElement`, `TontooUiTextureElement`.
 
 ## Cross References

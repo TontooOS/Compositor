@@ -1,11 +1,12 @@
 # Tontoo Compositor – Wiki
 
 The Wayland compositor for TontooOS, built on smithay 0.7. It renders the
-desktop shell (dock, window decorations) on the GPU, runs on either
+desktop shell (window decorations) on the GPU, runs on either
 the winit or the udev/DRM backend, and exposes a custom `tontoo_ui` Wayland
 protocol for server-side-rendered applications. The top menu bar is not
 rendered here; it is the external `Menubar.app` system app (see
-[Menubar.md](Menubar.md)).
+[Menubar.md](Menubar.md)). The bottom dock is not rendered here either;
+it is the external `Dock.app` system app (see [Dock.md](Dock.md)).
 
 - Repository: https://github.com/TontooOS/Libs
 - License: TCL v26.1
@@ -24,7 +25,7 @@ rendered here; it is the external `Menubar.app` system app (see
 | Cursor | [Cursor.md](Cursor.md) | XCursor loading, magnification, render elements |
 | Wallpaper | [Wallpaper.md](Wallpaper.md) | Wallpaper loading |
 | Shell | [Shell.md](Shell.md) | Aggregated shell state |
-| Dock | [Dock.md](Dock.md) | macOS-style dock with magnification |
+| Dock | [Dock.md](Dock.md) | External `Dock.app` system app (removed from compositor) |
 | Menubar | [Menubar.md](Menubar.md) | External `Menubar.app` system app (removed from compositor) |
 | Launcher | [Launcher.md](Launcher.md) | Application launcher overlay |
 | Topbar | [Topbar.md](Topbar.md) | Simple glass top bar |
@@ -69,6 +70,16 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-10: Remove the compositor-internal dock — deleted `shell::dock`
+  (`Dock`, `DockIcon`, `DockAnimation`), the `DockBar` render element,
+  dock glass/icon/hover textures (winit + udev), `RenderCache::{dock_panel,
+  dock_icons}`, dock icon click/hover/magnification/bounce handling in
+  `input.rs`, and the dock tick in both render pumps. Minimized windows
+  are still tracked (`minimized_windows` / `minimized_icons`) and
+  restored via the windows-ipc `restore_window` op, but no temporary dock
+  icon is pinned anymore. The bottom dock is now the external `Dock.app`
+  system app (TBuild bundle at `/System/Applications/Dock.app`, `dock`
+  LaunchPad service, same pattern as `Menubar.app`). See [Dock.md](Dock.md).
 - 2026-09-10: Force ClientSide decorations — `request_mode` ignores the
   client wish and always answers `ClientSide`, so every app draws its
   own header from the system theme; the `shell::ssd` bar stays dormant
@@ -133,9 +144,9 @@ for built-in shortcuts.
   now honors client requests (KWin-style) instead of forcing CSD; new
   shared `shell::ssd` module renders a traffic-light titlebar (Dark
   `#1d1d1d` / Light `#ececec`) for SSD windows on both winit and udev
-  backends; close/maximize/minimize/drag work on the bar, minimize pins
-  a temporary dock icon for restore (all strictly opt-in since
-  2026-09-10). See [WindowControls.md](WindowControls.md) and
+  backends; close/maximize/minimize/drag work on the bar, minimize
+  unmaps the window into `minimized_windows` for restore via `Dock.app`
+  (all strictly opt-in since 2026-09-10). See [WindowControls.md](WindowControls.md) and
   [WaylandHandlers.md](WaylandHandlers.md).
 - 2026-09-07: Fix traffic lights and theme toggle — traffic lights
   (`button-layout`, `gtk-decoration-layout`) are fixed once and no longer
@@ -151,5 +162,5 @@ for built-in shortcuts.
 
 - 2026-08-28: Fix compositor `stopped` on boot — add `XDG_RUNTIME_DIR` fallback in `init_wayland_listener` (`RuntimeDirNotSet` panic at `src/state.rs:203` when started without LaunchPad env), fix `start-compositor.sh` to set `XDG_RUNTIME_DIR`, handle plymouth DRM master (`plymouth deactivate/quit` via sudo, `pkill @lymouthd`, wait for `fuser /dev/dri/card0`), make script executable, clean stale `wayland-*.lock`; fix LaunchPad `restart` for stopped services and retry on spawn failure with backoff, add `.sh` fallback via `/bin/sh`.
 - 2026-08-27: Remove compositor-side topbar/titlebar — switch to Client-Side Decorations (CSD): apps now draw their own decoration bar; compositor keeps only shadow (improved 3-layer shadow with vertical bias, pad 64, offset 12, radii 10) + rounded border; `XdgDecorationHandler` now forces `ClientSide`; input titlebar/traffic-light handling removed; docs updated.
-- 2026-08-23: Fix 60 fps DRM commit storm on VirtualBox vmwgfx — render pump is now event-driven (only on `pending_redraw`, dock/animations, or clock minute change); dock uses real `dt` and `is_animating()`.
+- 2026-08-23: Fix 60 fps DRM commit storm on VirtualBox vmwgfx — render pump is now event-driven (only on `pending_redraw` or animations).
 - 2026-08-12: Initial wiki, extracted from the current source tree.

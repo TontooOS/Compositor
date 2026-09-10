@@ -44,7 +44,7 @@ impl CompositorHandler for TontooCompositor {
     fn destroyed(&mut self, _surface: &WlSurface) {
         // Surface destroyed (window closed) - force a redraw so ghost shadows are cleared.
         // Without this, the udev render pump (event-driven) would not notice the dead
-        // window until the next dock animation / clock tick, leaving a 33ms+ ghost.
+        // window until the next animation tick, leaving a 33ms+ ghost.
         self.pending_redraw = true;
     }
 

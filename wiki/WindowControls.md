@@ -51,7 +51,7 @@ backends.
 |---|---|
 | Close | `send_close` to the client |
 | Maximize | Toggles the maximized state; restores the previous geometry on toggle-off |
-| Minimize | Unmaps the window and pins a temporary dock icon (macOS behavior); clicking the icon restores the window |
+| Minimize | Unmaps the window and tracks it as minimized (macOS behavior); the external `Dock.app` restores it via the `restore_window` IPC op |
 | Bar background drag | Starts a `MoveSurfaceGrab` |
 
 Default app configuration ships system-following defaults out of the
@@ -182,5 +182,5 @@ Returns dark semi-transparent RGBA pixels on a transparent background.
 
 - [Shell.md](Shell.md) -- `ShellState::window_controls` hover map
 - [Rendering.md](Rendering.md) -- CSD windows draw their own header; SSD bars render above content
-- [Input.md](Input.md) -- SSD bar clicks, drag grabs, dock minimize/restore
+- [Input.md](Input.md) -- SSD bar clicks, drag grabs, minimize to `Dock.app`
 - [WaylandHandlers.md](WaylandHandlers.md) -- decoration negotiation (`ClientSide` default, honors `ServerSide`)

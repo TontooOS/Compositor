@@ -521,25 +521,12 @@ fn work_area(state: &TontooCompositor) -> (Point<i32, Logical>, Size<i32, Logica
     )
 }
 
-/// Minimize action: unmap the window and pin a temporary dock icon
-/// (macOS behavior). Clicking the icon restores the window.
+/// Minimize action: unmap the window and track it as minimized.
+/// The external Dock.app shows the minimized window and restores it
+/// via the windows-ipc `restore_window` op (or Genie/minimize toggle).
 pub fn minimize_to_dock(state: &mut TontooCompositor, window: &Window, name: String) {
     state.space.unmap_elem(window);
-    if !state
-        .shell
-        .dock
-        .icons
-        .iter()
-        .any(|i| i.name == name)
-    {
-        state.shell.dock.add_icon(&name);
-        state.minimized_icons.insert(name.clone());
-    }
-    for icon in state.shell.dock.icons.iter_mut() {
-        if icon.name == name {
-            icon.is_running = true;
-        }
-    }
+    state.minimized_icons.insert(name.clone());
     state.minimized_windows.push((name, window.clone()));
     if let Some(toplevel) = window.toplevel() {
         if state.focused_surface.as_ref() == Some(toplevel.wl_surface()) {
@@ -551,13 +538,13 @@ pub fn minimize_to_dock(state: &mut TontooCompositor, window: &Window, name: Str
 /// Restore a window minimized to the dock: re-map it centered on the
 /// primary output, raise it, mark it focused and active. Does NOT touch
 /// `minimized_windows` / `minimized_icons`: the caller drops the entry
-/// via [`untrack_minimized`] (shared by dock-icon clicks and the
+/// via [`untrack_minimized`] (shared by Dock.app clicks and the
 /// `restore_window` IPC op).
 /// Returns `false` when the client is gone (stale entry).
 pub fn restore_minimized(
     state: &mut TontooCompositor,
     window: &Window,
-    name: &str,
+    _name: &str,
 ) -> bool {
     let alive = window
         .toplevel()
@@ -575,11 +562,10 @@ pub fn restore_minimized(
         state.focused_surface = Some(surface);
         toplevel.send_pending_configure();
     }
-    state.shell.dock.set_active_app(name);
     true
 }
 
-/// Drop a `minimized_windows` entry and its temporary dock icon (if any).
+/// Drop a `minimized_windows` entry and its temporary minimized tag (if any).
 /// `surface` selects the exact entry; `None` drops every entry with `name`.
 pub fn untrack_minimized(
     state: &mut TontooCompositor,
@@ -595,9 +581,7 @@ pub fn untrack_minimized(
             _ => false,
         }
     });
-    if state.minimized_icons.remove(name) {
-        state.shell.dock.remove_icon(name);
-    }
+    state.minimized_icons.remove(name);
 }
 
 /// Center a window of the given size on the primary output.

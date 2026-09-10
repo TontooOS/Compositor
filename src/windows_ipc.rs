@@ -210,8 +210,8 @@ fn find_window(state: &mut TontooCompositor, id: u64) -> Result<Window, String> 
 }
 
 /// Restore a minimized window by daemon id: re-map it centered, raise it
-/// and drop the temporary dock icon (same path as clicking the internal
-/// dock icon). Errors when the id is not a minimized window, or when its
+/// and drop the temporary minimized tag (same path as Dock.app clicks).
+/// Errors when the id is not a minimized window, or when its
 /// client is gone (the stale entry is dropped then).
 fn restore_window(state: &mut TontooCompositor, id: u64) -> Result<(), String> {
     // Snapshot candidates first: resolving the id needs `&mut state`.

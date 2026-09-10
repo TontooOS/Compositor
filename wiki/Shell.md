@@ -7,7 +7,6 @@ state object. It is stored on `TontooCompositor` as `self.shell`.
 
 ```rust
 pub struct ShellState {
-    pub dock: Dock,
     pub launcher: Launcher,
     pub topbar: Topbar,
     pub window_controls: std::collections::HashMap<String, WindowControls>,
@@ -20,9 +19,11 @@ pub struct ShellState {
 pub fn new() -> Self
 ```
 
-Creates the shell state with a pre-populated dock containing five icons:
-Finder, Terminal, Settings, Notes, Podcasts. The launcher and topbar
-are initialized to their defaults. The `window_controls` map starts empty.
+Creates the shell state with default launcher and topbar. The
+`window_controls` map starts empty.
+
+> **Note:** There is no `Dock` state left on `ShellState`. The bottom
+> dock is the external `Dock.app` system app (see [Dock.md](Dock.md)).
 
 ### ShellState::launcher_visible
 
@@ -39,14 +40,6 @@ pub fn toggle_launcher(&mut self)
 ```
 
 Toggles the launcher overlay between visible and hidden.
-
-### ShellState::dock_height
-
-```rust
-pub fn dock_height(&self) -> f32
-```
-
-Returns the dock panel height in logical pixels (currently 78.0).
 
 ### ShellState::menubar_height
 
@@ -68,7 +61,8 @@ own traffic lights). Apps can still reuse the helper.
 ## Cross References
 
 - [State.md](State.md) -- `TontooCompositor::shell` field
-- [Dock.md](Dock.md) -- the `Dock` component
+- [Dock.md](Dock.md) -- external `Dock.app` system app (removed
+  from the compositor; the compositor renders nothing at the bottom)
 - [Menubar.md](Menubar.md) -- external `Menubar.app` system app (removed
   from the compositor; only the top strut remains)
 - [Launcher.md](Launcher.md) -- the `Launcher` component

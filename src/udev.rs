@@ -47,7 +47,7 @@ use smithay::{
 };
 
 use crate::cursor::{
-    CursorRenderElement, CursorTextureElement, DockBarElement,
+    CursorRenderElement, CursorTextureElement,
     TontooRenderElements, WallpaperElement, WindowBorderElement,
     WindowShadowElement,
 };
@@ -196,7 +196,7 @@ pub fn init_udev(
     // page-flip completion (VBlank) events. Frames are therefore presented with
     // `commit_frame` (synchronous, no VBlank required) and this timer drives
     // rendering while something actually needs frames (input damage,
-    // Wayland commits, dock animations).
+    // Wayland commits, animations).
     //
     // IMPORTANT: this timer must NOT call `try_render_all` unconditionally.
     // smithay's DrmCompositor treats every `render_frame` as a real frame (the
@@ -229,7 +229,6 @@ pub fn init_udev(
                     }
                 }
                 if state.pending_redraw
-                    || state.shell.dock.is_animating()
                     || state.animation_manager.has_active()
                 {
                     crate::udev::try_render_all(state);
@@ -615,28 +614,9 @@ pub fn try_render_all(state: &mut TontooCompositor) {
         }
     }
 
-    // Dock animation: advance spring physics with the real elapsed time so
-    // event-driven renders (which may be far apart) stay smooth.
-    let dt = state.last_render.elapsed().as_secs_f32().min(0.1);
-    state.last_render = std::time::Instant::now();
-    state.shell.dock.tick(dt);
-
     // The frame about to be rendered satisfies every pending damage request;
     // the render pump re-sets this when new input or Wayland commits arrive.
     state.pending_redraw = false;
-
-    // Compute dock magnification based on pointer position on first output
-    let pointer_x = state.seat.get_pointer().map(|p| p.current_location().x);
-    if let Some(x) = pointer_x {
-        if let Some(output) = state.space.outputs().next() {
-            if let Some(geo) = state.space.output_geometry(output) {
-                state
-                    .shell
-                    .dock
-                    .compute_magnification(x as f32, geo.size.w as f32);
-            }
-        }
-    }
 
     // Split field borrows to avoid conflicts when passing multiple refs
     let space = &state.space;
@@ -644,7 +624,6 @@ pub fn try_render_all(state: &mut TontooCompositor) {
     let wallpaper = state.wallpaper.as_ref();
     let wallpaper_buffer = &mut state.wallpaper_buffer;
     let seat = &state.seat;
-    let active_app = &state.shell.dock.active_app;
     let render_cache = &mut state.render_cache;
     let tontoo_ui = &state.tontoo_ui;
     let window_controls = &mut state.shell.window_controls;
@@ -669,7 +648,6 @@ pub fn try_render_all(state: &mut TontooCompositor) {
                 Some(cursor),
                 pointer_pos,
                 wallpaper_buffer,
-                active_app,
                 render_cache,
                 tontoo_ui,
                 state.focused_surface.as_ref(),
@@ -737,115 +715,6 @@ fn wallpaper_buffer_to_element(
         Some(Size::from((scaled_w, scaled_h))),
         Kind::Unspecified,
     )
-}
-
-/// Create a glass-effect texture buffer with 2-pass software blur, adaptive wallpaper color, and 1px border.
-/// `blur_src` = (wallpaper_pixels, wp_w, wp_h, screen_w, screen_h, dock_x, dock_y)
-fn create_glass_texture(
-    renderer: &mut GlesRenderer,
-    w: i32,
-    h: i32,
-    cr: i32,
-    blur_src: Option<(&[u8], i32, i32, i32, i32, i32, i32)>,
-    tex_scale: i32,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let wu = w as u32;
-    let hu = h as u32;
-    let mut data = vec![0u8; (wu * hu * 4) as usize];
-
-    if let Some((wp_dat, wp_w, wp_h, sc_w, sc_h, dx, dy)) = blur_src {
-        let fill_scale = (sc_w as f64 / wp_w as f64).max(sc_h as f64 / wp_h as f64);
-        let off_x = ((sc_w as f64 - wp_w as f64 * fill_scale) / 2.0) as f64;
-        let off_y = ((sc_h as f64 - wp_h as f64 * fill_scale) / 2.0) as f64;
-
-        // 2-pass box blur (~10x10 Gaussian)
-        // Map each texture pixel to the wallpaper: screen px = region origin + tex px / tex_scale,
-        // wallpaper px = (screen px - wallpaper fill offset) / fill_scale.
-        let mut tmp = vec![0u8; (wu * hu * 4) as usize];
-        let tex_to_screen = 1.0 / tex_scale as f64;
-        box_blur_5x5(
-            wp_dat, &mut tmp, wu, hu, wp_w as u32, wp_h as u32,
-            (dx as f64 - off_x) as i32, (dy as f64 - off_y) as i32,
-            tex_to_screen, tex_to_screen, fill_scale,
-        );
-        box_blur_5x5(&tmp, &mut data, wu, hu, wu, hu, 0, 0, 0.0, 0.0, 1.0);
-
-        // Glass overlay: 30% white tint over blurred wallpaper (matches vorschau alpha=0.32)
-        for i in (0..data.len()).step_by(4) {
-            data[i]     = (data[i] as f32 * 0.70 + 255.0 * 0.30) as u8;
-            data[i + 1] = (data[i + 1] as f32 * 0.70 + 255.0 * 0.30) as u8;
-            data[i + 2] = (data[i + 2] as f32 * 0.70 + 255.0 * 0.30) as u8;
-            data[i + 3] = 255;
-        }
-    } else {
-        for i in (0..data.len()).step_by(4) {
-            data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = 77;
-        }
-    }
-
-    // Anti-aliased rounded corners + 2px border (opacity 0.63 ≈ 160)
-    for y in 0..hu { for x in 0..wu {
-        let dist = signed_dist_rounded(x as f64, y as f64, wu as f64, hu as f64, cr as f64);
-        let i = ((y * wu + x) * 4) as usize;
-
-        if dist < 0.0 {
-            // Inside rounded rect → keep glass content, full opacity
-            data[i + 3] = 255;
-        } else if dist < 4.0 {
-            // Border zone: 2px white border (4 texture px at 2× scale), fade out
-            let border_t = dist; // 0..4
-            let border_alpha = (160.0 * (1.0 - border_t / 4.0)) as u8;
-            let bg_r = data[i] as f32; let bg_g = data[i + 1] as f32; let bg_b = data[i + 2] as f32;
-            let t = border_alpha as f32 / 255.0;
-            data[i]     = (bg_r * (1.0 - t) + 255.0 * t) as u8;
-            data[i + 1] = (bg_g * (1.0 - t) + 255.0 * t) as u8;
-            data[i + 2] = (bg_b * (1.0 - t) + 255.0 * t) as u8;
-            data[i + 3] = 255;
-        } else {
-            // Outside → transparent
-            data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
-        }
-    }}
-
-    TextureBuffer::from_memory(renderer, &data, Fourcc::Abgr8888, (w, h), false, tex_scale, Transform::Normal, None).ok()
-}
-
-/// 5×5 box blur kernel. Blurs source pixels into dest.
-fn box_blur_5x5(
-    src: &[u8], dest: &mut [u8],
-    dw: u32, dh: u32,
-    sw: u32, sh: u32,
-    off_x: i32, off_y: i32,
-    sx: f64, sy: f64,
-    fill_scale: f64,
-) {
-    let kernel_size: i32 = 2;
-    for oy in 0..dh {
-        for ox in 0..dw {
-            // Map dest pixel to source pixel (if source is wallpaper-sized)
-            let spx = if sx > 0.0 { ((ox as f64 * sx + off_x as f64) / fill_scale) as i32 } else { ox as i32 };
-            let spy = if sy > 0.0 { ((oy as f64 * sy + off_y as f64) / fill_scale) as i32 } else { oy as i32 };
-
-            let mut r = 0u32; let mut g = 0u32; let mut b = 0u32; let mut a = 0u32; let mut cnt = 0u32;
-            for ky in -kernel_size..=kernel_size {
-                for kx in -kernel_size..=kernel_size {
-                    let px = (spx + kx).clamp(0, sw as i32 - 1) as u32;
-                    let py = (spy + ky).clamp(0, sh as i32 - 1) as u32;
-                    let idx = ((py * sw + px) * 4) as usize;
-                    if idx + 3 < src.len() {
-                        r += src[idx] as u32;
-                        g += src[idx + 1] as u32;
-                        b += src[idx + 2] as u32;
-                        a += src[idx + 3] as u32;
-                        cnt += 1;
-                    }
-                }
-            }
-            let di = ((oy * dw + ox) * 4) as usize;
-            if cnt > 0 { r /= cnt; g /= cnt; b /= cnt; a /= cnt; }
-            dest[di] = r as u8; dest[di + 1] = g as u8; dest[di + 2] = b as u8; dest[di + 3] = a as u8;
-        }
-    }
 }
 
 /// Signed distance to rounded rectangle (negative = inside, positive = outside).
@@ -1013,167 +882,6 @@ fn clear_color_to_scheme(clear_color: [f32; 4]) -> crate::config::ColorScheme {
     }
 }
 
-/// Draw a 5×5 letter pattern into a pixel buffer.
-fn draw_letter_bitmap(
-    data: &mut [u8],
-    buf_w: u32,
-    x: i32,
-    y: i32,
-    letter: char,
-    color: u32,
-) {
-    let pattern: Vec<Vec<u8>> = match letter {
-        'T' => vec![
-            vec![1, 1, 1, 1, 1],
-            vec![0, 0, 1, 0, 0],
-            vec![0, 0, 1, 0, 0],
-            vec![0, 0, 1, 0, 0],
-            vec![0, 0, 1, 0, 0],
-        ],
-        'N' => vec![
-            vec![1, 0, 0, 0, 1],
-            vec![1, 1, 0, 0, 1],
-            vec![1, 0, 1, 0, 1],
-            vec![1, 0, 0, 1, 1],
-            vec![1, 0, 0, 0, 1],
-        ],
-        'F' => vec![
-            vec![1, 1, 1, 1, 1],
-            vec![1, 0, 0, 0, 0],
-            vec![1, 1, 1, 0, 0],
-            vec![1, 0, 0, 0, 0],
-            vec![1, 0, 0, 0, 0],
-        ],
-        'S' => vec![
-            vec![0, 1, 1, 1, 0],
-            vec![1, 0, 0, 0, 0],
-            vec![0, 1, 1, 0, 0],
-            vec![0, 0, 0, 1, 0],
-            vec![1, 1, 1, 0, 0],
-        ],
-        'P' => vec![
-            vec![1, 1, 1, 0, 0],
-            vec![1, 0, 0, 1, 0],
-            vec![1, 1, 1, 0, 0],
-            vec![1, 0, 0, 0, 0],
-            vec![1, 0, 0, 0, 0],
-        ],
-        _ => return,
-    };
-
-    let scale = 4u32;
-    let r = (color >> 16) as u8;
-    let g = ((color >> 8) & 0xFF) as u8;
-    let b = (color & 0xFF) as u8;
-    let a = (color >> 24) as u8;
-
-    for py in 0..pattern.len() {
-        for px in 0..pattern[py].len() {
-            if pattern[py][px] == 0 {
-                continue;
-            }
-            for sy in 0..scale {
-                for sx in 0..scale {
-                    let dx = (x as u32 + px as u32 * scale + sx) as u32;
-                    let dy = (y as u32 + py as u32 * scale + sy) as u32;
-                    let i = ((dy * buf_w + dx) * 4) as usize;
-                    if i + 3 < data.len() {
-                        data[i] = b;
-                        data[i + 1] = g;
-                        data[i + 2] = r;
-                        data[i + 3] = a;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Create a dock icon texture (rounded rect with a letter).
-fn create_dock_icon(
-    renderer: &mut GlesRenderer,
-    size: i32,
-    corner_radius: i32,
-    color: u32,
-    letter: char,
-    tex_scale: i32,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let su = size as u32;
-    let cru = corner_radius as u32;
-    let mut data = vec![0u8; (su * su * 4) as usize];
-
-    for y in 0..su {
-        for x in 0..su {
-            let dist = if x < cru && y < cru {
-                (((cru - x) * (cru - x) + (cru - y) * (cru - y)) as f64).sqrt()
-            } else if x >= su - cru && y < cru {
-                let dx = if x > su - cru { x - (su - cru) } else { 0 };
-                let dy = if y < cru { cru - y } else { 0 };
-                ((dx * dx + dy * dy) as f64).sqrt()
-            } else if x < cru && y >= su - cru {
-                let dx = if x < cru { cru - x } else { 0 };
-                let dy = if y > su - cru { y - (su - cru) } else { 0 };
-                ((dx * dx + dy * dy) as f64).sqrt()
-            } else if x >= su - cru && y >= su - cru {
-                let dx = if x > su - cru { x - (su - cru) } else { 0 };
-                let dy = if y > su - cru { y - (su - cru) } else { 0 };
-                ((dx * dx + dy * dy) as f64).sqrt()
-            } else {
-                -1.0
-            };
-
-            let i = ((y * su + x) * 4) as usize;
-            if dist >= 0.0 && dist > cru as f64 {
-                data[i + 3] = 0;
-            } else {
-                data[i] = (color & 0xFF) as u8;
-                data[i + 1] = ((color >> 8) & 0xFF) as u8;
-                data[i + 2] = ((color >> 16) & 0xFF) as u8;
-                data[i + 3] = ((color >> 24) & 0xFF) as u8;
-            }
-        }
-    }
-
-    // Draw letter centered on icon
-    draw_letter_bitmap(&mut data, su, ((su as i32 - 20) / 2).max(0), ((su as i32 - 20) / 2).max(0), letter, 0xFFFFFFFF);
-
-    TextureBuffer::from_memory(renderer, &data, Fourcc::Abgr8888, (size, size), false, tex_scale, Transform::Normal, None).ok()
-}
-
-fn create_hover_border(
-    renderer: &mut GlesRenderer,
-    size: i32,
-    corner_radius: i32,
-    border_width: i32,
-    tex_scale: i32,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let su = size as u32;
-    let cru = corner_radius as u32;
-    let bw = border_width as u32;
-    let mut data = vec![0u8; (su * su * 4) as usize];
-
-    for y in 0..su { for x in 0..su {
-        let dist = if x < cru && y < cru { (((cru - x) * (cru - x) + (cru - y) * (cru - y)) as f64).sqrt() }
-            else if x >= su - cru && y < cru { let dx = if x > su - cru { x - (su - cru) } else { 0 }; let dy = if y < cru { cru - y } else { 0 }; ((dx*dx + dy*dy) as f64).sqrt() }
-            else if x < cru && y >= su - cru { let dx = if x < cru { cru - x } else { 0 }; let dy = if y > su - cru { y - (su - cru) } else { 0 }; ((dx*dx + dy*dy) as f64).sqrt() }
-            else if x >= su - cru && y >= su - cru { let dx = if x > su - cru { x - (su - cru) } else { 0 }; let dy = if y > su - cru { y - (su - cru) } else { 0 }; ((dx*dx + dy*dy) as f64).sqrt() }
-            else { -1.0 };
-
-        let i = ((y * su + x) * 4) as usize;
-
-        if dist >= 0.0 && dist <= bw as f64 {
-            let inner_aa = if dist < 1.0 { dist } else { 1.0 };
-            let outer_aa = if dist > bw as f64 - 1.0 { bw as f64 - dist } else { 1.0 };
-            let alpha = (inner_aa * outer_aa * 160.0).min(255.0) as u8;
-            data[i] = 180; data[i+1] = 180; data[i+2] = 180; data[i+3] = alpha;
-        } else {
-            data[i] = 0; data[i+1] = 0; data[i+2] = 0; data[i+3] = 0;
-        }
-    }}
-
-    TextureBuffer::from_memory(renderer, &data, Fourcc::Abgr8888, (size, size), false, tex_scale, Transform::Normal, None).ok()
-}
-
 fn render_surface(
     surface: &mut SurfaceData,
     renderer: &mut GlesRenderer,
@@ -1183,7 +891,6 @@ fn render_surface(
     cursor: Option<&mut crate::cursor::CursorState>,
     pointer_pos: Option<smithay::utils::Point<f64, smithay::utils::Logical>>,
     wallpaper_buffer: &mut Option<TextureBuffer<GlesTexture>>,
-    active_app: &Option<String>,
     render_cache: &mut crate::render_cache::RenderCache,
     tontoo_ui: &crate::handlers::tontoo_ui::TontooUiState,
     focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
@@ -1220,103 +927,11 @@ fn render_surface(
     // DRM compositor renders front-to-back (index 0 = topmost).
     // Cursor is inserted at index 0 AFTER all pushes, shifting everything +2.
     // So we push in REVERSE z-order: topmost element first → bottommost last.
-    // After cursor insert: [cursor, cursor2, dockbar, space, wallpaper]
-    // NOTE: no compositor-side menubar. The top strut is reserved for the
-    // external Menubar.app system app (LaunchPad service).
+    // After cursor insert: [cursor, cursor2, space, wallpaper]
+    // NOTE: no compositor-side menubar or dock. The top bar is the external
+    // Menubar.app system app and the bottom dock is the external Dock.app
+    // system app (both LaunchPad services, drawn as layer-shell surfaces).
     let output_size = Size::from((output_geo.size.w, output_geo.size.h));
-
-    // 1. Dock (macOS-style glass panel + icons) — rendered at 2x for crisp HiDPI
-    {
-        const DOCK_H: f32 = 78.0;
-        const CORNER_R: f32 = 22.0;
-        const BOTTOM_MARGIN: f32 = 15.0;
-        const ICON_SIZE: f32 = 48.0;
-        const ICON_GAP: f32 = 12.0;
-        const ICON_RADIUS: f32 = 12.0;
-        const DOCK_SCALE: i32 = 2;
-
-        let sw = output_geo.size.w as f32;
-        let sh = output_geo.size.h as f32;
-        let icon_count = 5;
-        let total_icons_w = ICON_SIZE * icon_count as f32 + ICON_GAP * (icon_count as f32 - 1.0);
-        let dw = (total_icons_w + 32.0).min(sw - 40.0);
-        let dx = (sw - dw) / 2.0;
-        let dy = sh - DOCK_H - BOTTOM_MARGIN;
-
-        let dock_color_scheme = if clear_color[0] < 0.5 { crate::config::ColorScheme::Dark } else { crate::config::ColorScheme::Light };
-
-        // Glass panel (2x resolution, scale=2 for smithay)
-        let blur_data = wallpaper.and_then(|wp| {
-            let (wp_w, wp_h) = wp.size();
-            Some((wp.pixels(), wp_w, wp_h, sw as i32, sh as i32, dx as i32, dy as i32))
-        });
-        if render_cache.dock_panel.as_ref().map(|(w2, h2, s2, _)| (*w2, *h2, *s2)) != Some((dw as i32 * DOCK_SCALE, (DOCK_H * DOCK_SCALE as f32) as i32, dock_color_scheme)) {
-            if let Some(buf) = create_glass_texture(renderer, dw as i32 * DOCK_SCALE, (DOCK_H * DOCK_SCALE as f32) as i32, (CORNER_R * DOCK_SCALE as f32) as i32, blur_data, DOCK_SCALE) {
-                render_cache.dock_panel = Some((dw as i32 * DOCK_SCALE, (DOCK_H * DOCK_SCALE as f32) as i32, dock_color_scheme, buf));
-            }
-        }
-
-        // Icons (2x resolution, scale=2 for smithay)
-        let icon_start_x = dx + (dw - total_icons_w) / 2.0;
-        let icon_y = dy + (DOCK_H - ICON_SIZE) / 2.0;
-
-        let icon_data = [
-            ("Finder", 0xFF2196F3u32, 'F'),
-            ("Terminal", 0xFF2979FFu32, 'T'),
-            ("Settings", 0xFF9E9E9Eu32, 'S'),
-            ("Notes", 0xFF4CAF50u32, 'N'),
-            ("Podcasts", 0xFF9C27B0u32, 'P'),
-        ];
-        for (i, (name, color, letter)) in icon_data.iter().enumerate() {
-            let x = icon_start_x + i as f32 * (ICON_SIZE + ICON_GAP);
-            let icon_key = (name.to_string(), dock_color_scheme, (ICON_SIZE * DOCK_SCALE as f32) as i32);
-            if !render_cache.dock_icons.contains_key(&icon_key) {
-                if let Some(buf) = create_dock_icon(renderer, (ICON_SIZE * DOCK_SCALE as f32) as i32, (ICON_RADIUS * DOCK_SCALE as f32) as i32, *color, *letter, DOCK_SCALE) {
-                    render_cache.dock_icons.insert(icon_key.clone(), buf);
-                }
-            }
-            if let Some(ref buf) = render_cache.dock_icons.get(&icon_key) {
-                let elem = TextureRenderElement::from_texture_buffer(
-                    Point::from((x as f64, icon_y as f64)),
-                    &buf, None, None,
-                    Some(Size::from((ICON_SIZE as i32, ICON_SIZE as i32))),
-                    Kind::Unspecified,
-                );
-                all_elements.push(TontooRenderElements::DockBar(DockBarElement(elem)));
-            }
-
-            // Running-app black dot indicator
-            let is_active = active_app.as_deref() == Some(*name);
-            if is_active {
-                let dot_size: f32 = 6.0;
-                let dot_x = x + (ICON_SIZE - dot_size) / 2.0;
-                let dot_y = icon_y + ICON_SIZE + 3.0;
-                let dot_pixel: [u8; 4] = [0x00, 0x00, 0x00, 0xFF]; // black
-                if let Ok(dot_buf) = TextureBuffer::from_memory(
-                    renderer, &dot_pixel, Fourcc::Abgr8888, (1, 1), false, 1, Transform::Normal, None,
-                ) {
-                    let elem = TextureRenderElement::from_texture_buffer(
-                        Point::from((dot_x as f64, dot_y as f64)),
-                        &dot_buf, None, None,
-                        Some(Size::from((dot_size as i32, dot_size as i32))),
-                        Kind::Unspecified,
-                    );
-                    all_elements.push(TontooRenderElements::DockBar(DockBarElement(elem)));
-                }
-            }
-        }
-
-        // Glass panel (pushed AFTER icons so it renders below them via .rev() iteration)
-        if let Some((_, _, _, ref buf)) = render_cache.dock_panel {
-            let elem = TextureRenderElement::from_texture_buffer(
-                Point::from((dx as f64, dy as f64)),
-                buf, None, None,
-                Some(Size::from((dw as i32, DOCK_H as i32))),
-                Kind::Unspecified,
-            );
-            all_elements.push(TontooRenderElements::DockBar(DockBarElement(elem)));
-        }
-    }
 
     // Top strut: reserved for the external Menubar.app system app, drawn
     // below as a Top-layer surface. Windows are placed below the strut

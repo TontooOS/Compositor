@@ -91,11 +91,11 @@ pub struct TontooCompositor {
     /// The currently focused window surface (for 2-click behavior and active app tracking).
     pub focused_surface: Option<WlSurface>,
 
-    /// Windows minimized to the dock as (display name, window) pairs.
-    /// Clicking the matching dock icon restores the window.
+    /// Windows minimized by SSD / windows-ipc as (display name, window) pairs.
+    /// The external Dock.app restores them via `restore_window`.
     pub minimized_windows: Vec<(String, Window)>,
 
-    /// Dock icon names pinned temporarily for minimized windows.
+    /// Names tagged temporarily for minimized windows.
     /// Removed again when the window is restored.
     pub minimized_icons: HashSet<String>,
 

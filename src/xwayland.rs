@@ -262,7 +262,7 @@ fn remove_x11_window(state: &mut TontooCompositor, window: &X11Surface) {
     }
 }
 
-/// App name for the menubar / dock, mirroring the Wayland lookup order.
+/// App name for shell clients (Menubar.app / Dock.app), mirroring the Wayland lookup order.
 pub fn x11_app_name(window: &Window) -> Option<String> {
     let x11 = window.x11_surface()?;
     let title = x11.title();

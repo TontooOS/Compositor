@@ -9,8 +9,8 @@ use smithay::{
             AxisFrame, ButtonEvent, Focus, GrabStartData as PointerGrabStartData, MotionEvent,
         },
     },
-    reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
-    utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    utils::{Logical, Point, SERIAL_COUNTER},
 };
 
 use crate::grabs::MoveSurfaceGrab;
@@ -52,7 +52,7 @@ impl TontooCompositor {
                     );
                     if pressed && modifiers.logo {
                         tracing::info!("Super+Enter pressed, launching terminal...");
-                        Self::launch_app_static("Terminal");
+                        Self::launch_terminal();
                         return;
                     }
                 }
@@ -114,7 +114,6 @@ impl TontooCompositor {
                 let new_pos = Point::from((current.x + delta.x, current.y + delta.y));
                 drop(pointer);
                 self.cursor.update_speed(new_pos);
-                self.update_dock_hover(new_pos);
                 self.update_tontoo_ui_hover(new_pos);
                 self.update_ssd_hover(new_pos);
                 let under = self.surface_under(new_pos);
@@ -145,7 +144,6 @@ impl TontooCompositor {
                 let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
                 let serial = SERIAL_COUNTER.next_serial();
                 self.cursor.update_speed(pos);
-                self.update_dock_hover(pos);
                 self.update_ssd_hover(pos);
                 let under = self.surface_under(pos);
                 let pointer = self.seat.get_pointer().unwrap();
@@ -170,82 +168,8 @@ impl TontooCompositor {
 
                 if ButtonState::Pressed == button_state {
                     let pos = pointer.current_location();
-                    let pos_i = Point::from((pos.x as i32, pos.y as i32));
 
-                    // ── 1. Dock icon clicks (always processed first) ──
-                    // Hit test first with short-lived borrows, then act.
-                    let dock_hit: Option<String> = self
-                        .space
-                        .outputs()
-                        .next()
-                        .and_then(|o| self.space.output_geometry(o))
-                        .map(|geo| {
-                            let sw = geo.size.w as f64;
-                            let sh = geo.size.h as f64;
-                            let icon_count = self.shell.dock.icons.len();
-                            let rects = Self::dock_icon_rects(sw, sh, icon_count);
-                            rects
-                                .iter()
-                                .enumerate()
-                                .find(|(_, rect)| rect.contains(pos_i))
-                                .map(|(idx, _)| self.shell.dock.icons[idx].name.clone())
-                        })
-                        .flatten();
-                    if let Some(icon_name) = dock_hit {
-                        // Restore a minimized window instead of launching
-                        // when a matching minimized window exists.
-                        if let Some(min_idx) = self
-                            .minimized_windows
-                            .iter()
-                            .position(|(n, _)| *n == icon_name)
-                        {
-                            let (name, window) = self.minimized_windows.remove(min_idx);
-                            if crate::shell::ssd::restore_minimized(self, &window, &name) {
-                                tracing::info!("Dock: restoring minimized '{}'", name);
-                                if let Some(toplevel) = window.toplevel() {
-                                    keyboard.set_focus(
-                                        self,
-                                        Some(toplevel.wl_surface().clone()),
-                                        serial,
-                                    );
-                                }
-                                crate::shell::ssd::untrack_minimized(
-                                    self,
-                                    &name,
-                                    window
-                                        .toplevel()
-                                        .map(|t| t.wl_surface().id())
-                                        .as_ref(),
-                                );
-                                self.pending_redraw = true;
-                                let _ = self.loop_signal.wakeup();
-                                return;
-                            }
-                            // Stale entry (client exited): drop the temp
-                            // icon and fall through to launching.
-                            if self.minimized_icons.remove(&name) {
-                                self.shell.dock.remove_icon(&name);
-                            }
-                        }
-
-                        tracing::info!("Dock: '{}' clicked", icon_name);
-
-                        // Bounce the icon
-                        self.shell.dock.bounce_icon(&icon_name);
-                        self.shell.dock.set_active_app(&icon_name);
-
-                        // Launch the app
-                        Self::launch_app_static(&icon_name);
-
-                        // Mark icon as running
-                        if let Some(icon) = self.shell.dock.icons.iter_mut().find(|i| i.name == icon_name) {
-                            icon.is_running = true;
-                        }
-
-                        return;
-                    }
-
-                    // ── 2. TontooUI surface clicks ──
+                    // ── 1. TontooUI surface clicks ──
                     if !pointer.is_grabbed() {
                         let mut handled = false;
                         if let Some(output) = self.space.outputs().next() {
@@ -314,7 +238,6 @@ impl TontooCompositor {
                             self.focused_surface = Some(window_surface.clone());
                             let app_name = window_app_name(&window)
                                 .unwrap_or_else(|| "TontooOS".to_string());
-                                                        self.shell.dock.set_active_app(&app_name);
 
                             match crate::shell::ssd::hit_test(bar, pos) {
                                 Some(action) => {
@@ -424,11 +347,6 @@ impl TontooCompositor {
                                 // Track focused surface
                                 self.focused_surface = Some(window_surface.clone());
 
-                                // Update dock active_app based on window app_id
-                                let app_name = window_app_name(&window)
-                                    .unwrap_or_else(|| "TontooOS".to_string());
-                                self.shell.dock.set_active_app(&app_name);
-
                                 return;
                             }
                         } else {
@@ -443,7 +361,6 @@ impl TontooCompositor {
 
                             // Clear focused state
                             self.focused_surface = None;
-                            self.shell.dock.clear_active_app();
                         }
                     }
                 }
@@ -502,59 +419,9 @@ impl TontooCompositor {
         }
     }
 
-    /// Compute dock icon hit rectangles for all icons given screen dimensions.
-    fn dock_icon_rects(screen_w: f64, screen_h: f64, icon_count: usize) -> Vec<Rectangle<i32, Logical>> {
-        const DOCK_H: f64 = 78.0;
-        const BOTTOM_MARGIN: f64 = 15.0;
-        const ICON_SIZE: f64 = 48.0;
-        const ICON_GAP: f64 = 12.0;
-
-        if icon_count == 0 {
-            return Vec::new();
-        }
-
-        let count = icon_count;
-        let total_icons_w = ICON_SIZE * count as f64 + ICON_GAP * (count as f64 - 1.0).max(0.0);
-        let dock_w = (total_icons_w + 32.0).min(screen_w - 40.0);
-        let dx = (screen_w - dock_w) / 2.0;
-        let dy = screen_h - DOCK_H - BOTTOM_MARGIN;
-        let icon_y = dy + (DOCK_H - ICON_SIZE) / 2.0;
-        let icon_start_x = dx + (dock_w - total_icons_w) / 2.0;
-
-        let mut rects = Vec::with_capacity(count);
-        for i in 0..count {
-            let x = icon_start_x + i as f64 * (ICON_SIZE + ICON_GAP);
-            rects.push(Rectangle::<i32, Logical>::new(
-                Point::from((x as i32, icon_y as i32)),
-                Size::from((ICON_SIZE as i32, ICON_SIZE as i32)),
-            ));
-        }
-        rects
-    }
-
-    /// Update dock hover state based on pointer position.
-    fn update_dock_hover(&mut self, pos: Point<f64, Logical>) {
-        if let Some(output) = self.space.outputs().next() {
-            if let Some(geo) = self.space.output_geometry(output) {
-                let sw = geo.size.w as f64;
-                let sh = geo.size.h as f64;
-                let icon_count = self.shell.dock.icons.len();
-                let rects = Self::dock_icon_rects(sw, sh, icon_count);
-                let pos_i = Point::from((pos.x as i32, pos.y as i32));
-                let mut hovered = None;
-                for (idx, rect) in rects.iter().enumerate() {
-                    if rect.contains(pos_i) {
-                        hovered = Some(idx);
-                        break;
-                    }
-                }
-                self.shell.dock.set_hover(hovered);
-            }
-        }
-    }
-
-    /// Launch an application by dock icon name.
-    fn launch_app_static(name: &str) {
+    /// Launch a terminal (Super+Enter shortcut). Apps are otherwise
+    /// launched from the external Dock.app / LaunchPad.
+    fn launch_terminal() {
         // Ensure child processes can connect to our Wayland display
         let wayland_display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
         let xdg_runtime = std::env::var("XDG_RUNTIME_DIR")
@@ -569,51 +436,14 @@ impl TontooCompositor {
                 .spawn()
         };
 
-        match name {
-            "Finder" => {
-                let file_managers = ["nautilus", "dolphin", "thunar", "pcmanfm", "nemo"];
-                for fm in &file_managers {
-                    if let Ok(_child) = spawn_with_env(fm) {
-                        tracing::info!("Launched file manager: {}", fm);
-                        return;
-                    }
-                }
-                tracing::warn!("No file manager found!");
-            }
-            "Terminal" => {
-                let terminals = ["foot", "alacritty", "kitty", "weston-terminal"];
-                for t in &terminals {
-                    if let Ok(_child) = spawn_with_env(t) {
-                        tracing::info!("Launched terminal: {}", t);
-                        return;
-                    }
-                }
-                tracing::warn!("No terminal found! Tried: foot, alacritty, kitty, weston-terminal");
-            }
-            "Settings" => {
-                let settings = ["gnome-control-center", "systemsettings", "xfce4-settings-editor"];
-                for s in &settings {
-                    if let Ok(_child) = spawn_with_env(s) {
-                        tracing::info!("Launched settings: {}", s);
-                        return;
-                    }
-                }
-                tracing::warn!("No settings app found!");
-            }
-            "Notes" => {
-                tracing::info!("Notes app: placeholder (coming soon)");
-            }
-            "Podcasts" => {
-                tracing::info!("Podcasts app: placeholder (coming soon)");
-            }
-            other => {
-                if let Ok(_child) = spawn_with_env(other) {
-                    tracing::info!("Launched app: {}", other);
-                    return;
-                }
-                tracing::warn!("Unknown app: {}", other);
+        let terminals = ["foot", "alacritty", "kitty", "weston-terminal"];
+        for t in &terminals {
+            if let Ok(_child) = spawn_with_env(t) {
+                tracing::info!("Launched terminal: {}", t);
+                return;
             }
         }
+        tracing::warn!("No terminal found! Tried: foot, alacritty, kitty, weston-terminal");
     }
 
     /// Track pointer hover over SSD titlebars for traffic-light symbols.

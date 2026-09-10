@@ -152,10 +152,8 @@ The udev backend presents frames with `DrmCompositor::commit_frame`
 but only renders when something actually needs a frame:
 
 - `state.pending_redraw` is set by input events, Wayland commits
-  (`CompositorHandler::commit`, layer-shell, `tontoo_ui` updates),
-  `set_color_scheme` and dock interactions
-- `state.shell.dock.is_animating()` is true while magnification springs or
-  bounce animations are moving
+  (`CompositorHandler::commit`, layer-shell, `tontoo_ui` updates) and
+  `set_color_scheme`
 - `state.animation_manager.has_active()` is true while a registered
   animation runs
 
@@ -170,9 +168,7 @@ starved serial, sshd and input.
 pub fn try_render_all(state: &mut TontooCompositor)
 ```
 
-Advances dock springs with the real elapsed time (`state.last_render`),
-clears `pending_redraw`, recomputes dock magnification from the pointer,
-and renders all surfaces.
+Clears `pending_redraw` and renders all surfaces.
 
 ### render_surface
 
@@ -186,7 +182,6 @@ fn render_surface(
     cursor: Option<&mut CursorState>,
     pointer_pos: Option<Point<f64, Logical>>,
     wallpaper_buffer: &mut Option<TextureBuffer<GlesTexture>>,
-    active_app: &Option<String>,
     render_cache: &mut RenderCache,
     tontoo_ui: &TontooUiState,
     focused_surface: Option<&WlSurface>,

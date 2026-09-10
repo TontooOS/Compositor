@@ -5,7 +5,6 @@ pub mod xdg_decoration;
 mod xdg_shell;
 
 use crate::TontooCompositor;
-use crate::state::window_app_name;
 
 use smithay::input::{dnd::DndGrabHandler, Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -41,23 +40,11 @@ impl SeatHandler for TontooCompositor {
         let client = focused.and_then(|s| dh.get_client(s.id()).ok());
         set_data_device_focus(dh, seat, client);
 
-        // Update tracked focused surface
+        // Update tracked focused surface.
+        // (The top menubar is the external Menubar.app system app and the
+        // bottom dock is the external Dock.app system app; neither is
+        // tracked inside the compositor.)
         self.focused_surface = focused.cloned();
-
-        // Update dock active_app based on focused window
-        // (the top menubar is an external system app: Menubar.app)
-        if let Some(wl_surface) = focused {
-            // Find the window with this surface
-            if let Some(window) = self.space.elements().find(|w| {
-                crate::state::window_wl_surface_any(w).as_ref() == Some(wl_surface)
-            }).cloned() {
-                let app_name = window_app_name(&window)
-                    .unwrap_or_else(|| "TontooOS".to_string());
-                self.shell.dock.set_active_app(&app_name);
-            }
-        } else {
-            self.shell.dock.clear_active_app();
-        }
     }
 }
 

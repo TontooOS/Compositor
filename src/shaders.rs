@@ -1,6 +1,6 @@
 //! Glass blur shaders for TontooOS compositor.
 //!
-//! Provides Gaussian blur effects for layer surfaces (topbar, dock, etc.).
+//! Provides Gaussian blur effects for layer surfaces (topbar, etc.).
 
 /// Vertex shader — simple fullscreen quad pass.
 const BLUR_VERTEX_SHADER: &str = r#"#version 300 es

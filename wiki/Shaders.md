@@ -1,7 +1,7 @@
 # Shaders
 
 The shaders module defines GLSL shaders for a two-pass separable Gaussian
-blur that can be applied to layer surfaces (topbar, dock, and similar). The
+blur that can be applied to layer surfaces (topbar and similar). The
 shaders are defined as constants and exposed through the `BlurPass` struct.
 
 > **Note:** `BlurPass` is a placeholder showing the shader approach. The

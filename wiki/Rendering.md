@@ -2,8 +2,8 @@
 
 The rendering module implements the GPU compositing pipeline for both the
 winit and udev/DRM backends. It composites the wallpaper, window decorations,
-client windows, tontoo_ui surfaces, dock, and cursor in the correct
-z-order.
+client windows, tontoo_ui surfaces, layer-shell system apps, and cursor in
+the correct z-order.
 
 ## Winit Backend
 
@@ -29,22 +29,19 @@ loop. The render loop handles four event types:
 On each `Redraw` event:
 
 1. Tick the animation manager.
-2. Tick the dock spring physics.
-3. Compute dock magnification.
-4. Bind the framebuffer.
-5. Build the render element list in z-order:
+2. Bind the framebuffer.
+3. Build the render element list in z-order:
    - Wallpaper (bottommost)
    - Background/Bottom layer-shell surfaces
    - Window shadows (improved 3-layer shadow)
    - Client windows (`Space`) — CSD: windows include their own header bar
    - Window border + rounded-corner mask
    - TontooUI surfaces
-   - Dock glass panel + icons + running-app dots
-   - Top/Overlay layer-shell surfaces (e.g. `Menubar.app`)
+   - Top/Overlay layer-shell surfaces (e.g. `Menubar.app`, `Dock.app`)
    - Cursor (topmost)
-6. Submit the frame with damage tracking.
-7. Send frame callbacks to windows and layer surfaces.
-8. Refresh the space and clean up popups.
+4. Submit the frame with damage tracking.
+5. Send frame callbacks to windows and layer surfaces.
+6. Refresh the space and clean up popups.
 
 > **Note:** Server-side titlebar / traffic lights have been removed. The
 > compositor now uses Client-Side Decorations (CSD): each app draws its own
@@ -61,13 +58,13 @@ back-to-front):
 3. `Space` (client windows, CSD)
 4. `WindowBorder`
 5. `TontooUi`
-6. `DockBar`
-7. Top/Overlay layer-shell surfaces (e.g. `Menubar.app`)
-8. `CursorTexture` / `CursorSurface`
+6. Top/Overlay layer-shell surfaces (e.g. `Menubar.app`, `Dock.app`)
+7. `CursorTexture` / `CursorSurface`
 
-> **Note:** The top bar is not rendered here. It is the external
-> `Menubar.app` system app (see [Menubar.md](Menubar.md)); the compositor
-> only reserves the top strut and windows are placed below it.
+> **Note:** Neither the top bar nor the dock is rendered here. They are
+> the external `Menubar.app` / `Dock.app` system apps (see
+> [Menubar.md](Menubar.md) / [Dock.md](Dock.md)); the compositor only
+> reserves the top strut and windows are placed below it.
 
 ## Z-Order (Udev)
 
@@ -75,8 +72,7 @@ The DRM compositor uses front-to-back ordering. Elements are pushed in
 reverse and the cursor is inserted at index 0:
 
 1. `CursorTexture` / `CursorSurface` (index 0, inserted last)
-2. Top/Overlay layer-shell surfaces (e.g. `Menubar.app`)
-3. `DockBar`
+2. Top/Overlay layer-shell surfaces (e.g. `Menubar.app`, `Dock.app`)
 3. `WindowBorder`
 4. `Space` (CSD)
 5. `TontooUi`
@@ -154,36 +150,9 @@ pub fn create_window_titlebar_texture(
 
 ## Glass Effects
 
-### create_glass_texture
-
-```rust
-fn create_glass_texture(
-    renderer: &mut GlesRenderer,
-    w: i32, h: i32, cr: i32,
-    blur_src: Option<(&[u8], i32, i32, i32, i32, i32, i32)>,
-    tex_scale: i32,
-) -> Option<TextureBuffer<GlesTexture>>
-```
-
-Creates a glass panel with 2-pass box blur over the wallpaper, a 30% white
-tint overlay, anti-aliased rounded corners, and a 2px white border. The
-border alpha is 0.63 (160/255).
-
-When no wallpaper is provided, a solid semi-transparent white is used.
-
-### box_blur_5x5
-
-```rust
-fn box_blur_5x5(
-    src: &[u8], dest: &mut [u8],
-    dw: u32, dh: u32, sw: u32, sh: u32,
-    off_x: i32, off_y: i32,
-    sx: f64, sy: f64, fill_scale: f64,
-)
-```
-
-5x5 box blur kernel. Maps destination pixels to source pixels when
-source and destination have different sizes. Used for the glass blur.
+> **Removed.** `create_glass_texture` and `box_blur_5x5` were deleted
+> with the internal dock (their only caller). The external `Dock.app`
+> draws its own glass panel.
 
 ### signed_dist_rounded
 
@@ -212,17 +181,9 @@ titles on the winit backend.
 
 ## Dock Rendering
 
-The dock renders at 2x resolution for HiDPI clarity. Icons use hardcoded
-color mappings:
-
-| App | Color (ABGR) |
-|---|---|
-| Finder | `0xFF2196F3` |
-| Terminal | `0xFF2979FF` |
-| Settings | `0xFF9E9E9E` |
-| Notes | `0xFF4CAF50` |
-| Podcasts | `0xFF9C27B0` |
-| Unknown | `0xFF607D8B` |
+> **Removed.** The compositor draws no dock. The bottom dock is the
+> external `Dock.app` system app, composited as a layer-shell surface
+> like `Menubar.app`. See [Dock.md](Dock.md).
 
 ## Cross References
 

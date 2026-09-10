@@ -1,7 +1,7 @@
 # Animation
 
 The animation module provides a lightweight tick-based animation system used by
-the dock, window transitions, and future compositor effects.
+window transitions and compositor effects.
 
 ## Animation
 
@@ -112,5 +112,4 @@ Returns the number of animations with `running == true`.
 ## Cross References
 
 - [State.md](State.md) -- `TontooCompositor::animation_manager` field
-- [Dock.md](Dock.md) -- dock bounce and magnification use `Animation`
 - [Rendering.md](Rendering.md) -- animation manager is ticked during render
