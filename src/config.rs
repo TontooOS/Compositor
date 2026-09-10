@@ -122,5 +122,10 @@ pub fn apply_color_scheme_env(scheme: ColorScheme) {
         std::env::set_var("XCURSOR_THEME", scheme.cursor_theme_name());
         std::env::set_var("XCURSOR_SIZE", "24");
         std::env::set_var("TERMINAL", "foot");
+        // Qt bridge (tontoo-theme-apply writes the matching qt5ct/qt6ct
+        // configs): every GUI child inherits the themed Qt platform.
+        std::env::set_var("QT_QPA_PLATFORMTHEME", "qt5ct");
+        // Prefer native Wayland in Electron apps, fall back to X11.
+        std::env::set_var("ELECTRON_OZONE_PLATFORM_HINT", "auto");
     }
 }

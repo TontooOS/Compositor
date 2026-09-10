@@ -121,6 +121,8 @@ Sets the following environment variables:
 | `XCURSOR_THEME` | `MacTahoe-dark-cursors` | `MacTahoe-cursors` |
 | `XCURSOR_SIZE` | `24` | `24` |
 | `TERMINAL` | `foot` | `foot` |
+| `QT_QPA_PLATFORMTHEME` | `qt5ct` | `qt5ct` |
+| `ELECTRON_OZONE_PLATFORM_HINT` | `auto` | `auto` |
 
 ## Traffic Lights And Icon Theme
 

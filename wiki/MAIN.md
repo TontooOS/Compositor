@@ -69,6 +69,21 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-10: CSD-first theming, enforcement removed — the compositor
+  never forces decorations again (`request_mode` only honors explicit
+  opt-in); one central theme push instead: `tontoo-theme-apply`
+  (`theme.service` at login, also called by Settings) writes gsettings,
+  GTK `settings.ini`, qt5ct/qt6ct configs with TontooOS palettes, the
+  Chromium Wayland hint and Flatpak overrides from
+  `~/.config/tontoo/theme.conf`; session env gains
+  `QT_QPA_PLATFORMTHEME=qt5ct` and `ELECTRON_OZONE_PLATFORM_HINT=auto`.
+  BaseOS adds `dconf`, `gsettings-desktop-schemas`,
+  `xdg-desktop-portal-gtk`, `qt5ct`, `qt6ct`, a portal routing config,
+  an SF Pro fontconfig default and a Chromium Wayland-hint skel file;
+  Chrome/VSCode skel seeds switched back to app-drawn headers
+  (CSD-first). See   [WindowControls.md](WindowControls.md),
+  [Configuration.md](Configuration.md) and
+  [WaylandHandlers.md](WaylandHandlers.md).
 - 2026-09-09: Windows IPC socket for CoreWindows (`src/windows_ipc.rs`,
   `/run/tontoo-windows.sock`, `WINDOWS_SOCKET` override): `ping`,
   `list_windows` (mapped + minimized, with app id/title/pid), minimize
@@ -105,15 +120,14 @@ for built-in shortcuts.
   `new_decoration`, `request_mode` and `unset_mode` always answer
   `ServerSide` for listed app IDs, so no per-app setup is needed.
   Also removed a duplicate unconditional `mod udev` in `main.rs`.
+  (Reverted 2026-09-10 in favor of CSD-first, see top entry.)
 - 2026-09-07: Server-side decorations for foreign apps — `request_mode`
   now honors client requests (KWin-style) instead of forcing CSD; new
   shared `shell::ssd` module renders a traffic-light titlebar (Dark
   `#1d1d1d` / Light `#ececec`) for SSD windows on both winit and udev
   backends; close/maximize/minimize/drag work on the bar, minimize pins
-  a temporary dock icon for restore; Chrome seeded with
-  `browser.custom_chrome_frame=false` and VSCode with
-  `window.titleBarStyle=native` via `/etc/skel`. See
-  [WindowControls.md](WindowControls.md) and
+  a temporary dock icon for restore (all strictly opt-in since
+  2026-09-10). See [WindowControls.md](WindowControls.md) and
   [WaylandHandlers.md](WaylandHandlers.md).
 - 2026-09-07: Fix traffic lights and theme toggle — traffic lights
   (`button-layout`, `gtk-decoration-layout`) are fixed once and no longer

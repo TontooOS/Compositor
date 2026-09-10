@@ -44,29 +44,6 @@ pub const BAR_HEIGHT: i32 = crate::config::TITLEBAR_HEIGHT;
 /// above this line (maximized windows keep their content untouched).
 pub const TOP_STRUT: f32 = 30.0;
 
-/// App IDs that always get server-side decorations, no matter what they
-/// request. These apps draw foreign (non-MacTahoe) headers themselves;
-/// the compositor traffic-light bar replaces them. Matched case-insensitive
-/// and exactly — extend when a new foreign-header app appears.
-pub const FORCE_SSD_APP_IDS: &[&str] = &[
-    "google-chrome",
-    "chromium",
-    "brave-browser",
-    "microsoft-edge",
-    "firefox",
-    "org.mozilla.firefox",
-    "code",
-    "code-oss",
-    "vscodium",
-    "cursor",
-];
-
-/// Returns true when the app must use the compositor titlebar.
-pub fn forces_ssd(app_id: &str) -> bool {
-    let id = app_id.to_lowercase();
-    FORCE_SSD_APP_IDS.iter().any(|known| id == *known)
-}
-
 /// Returns true when the window negotiated ServerSide decorations and the
 /// client acked the configure (i.e. the mode is currently active).
 pub fn is_ssd(window: &Window) -> bool {

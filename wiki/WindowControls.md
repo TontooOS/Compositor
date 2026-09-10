@@ -4,10 +4,11 @@ The window controls module implements macOS-style traffic light buttons
 (close, minimize, maximize) rendered in the top-left corner of each window.
 
 GTK/Qt apps use client-side decorations and draw their own MacTahoe
-header. Windows that negotiate `ServerSide` via xdg-decoration (Chrome
-with "Use system title bar", VSCode with native title bar) get a
-compositor-drawn titlebar from the `shell::ssd` module below, which
-reuses the geometry and pixel helpers documented here.
+header. Windows that explicitly negotiate `ServerSide` via
+xdg-decoration (e.g. Chrome with "Use system title bar" enabled by the
+user) get a compositor-drawn titlebar from the `shell::ssd` module
+below, which reuses the geometry and pixel helpers documented here.
+Server-side is strictly opt-in; nothing is ever forced.
 
 ## Server-Side Decorations (`shell::ssd`)
 
@@ -55,12 +56,17 @@ backends.
 | Minimize | Unmaps the window and pins a temporary dock icon (macOS behavior); clicking the icon restores the window |
 | Bar background drag | Starts a `MoveSurfaceGrab` |
 
-Default app configuration ships system title bars out of the box:
-Chrome via `browser.custom_chrome_frame=false` in the skeleton
-`Preferences`, VSCode via `window.titleBarStyle=native` in the
-skeleton `settings.json`. Firefox keeps its userChrome.css traffic
-lights from the skeleton profile at `/etc/skel/.mozilla/firefox`
+Default app configuration ships system-following defaults out of the
+box: Chromium auto-selects Wayland via the skeleton
+`chromium-flags.conf` and reads the GTK theme colors; VSCode follows
+the OS color scheme via `window.autoDetectColorScheme` in the skeleton
+`settings.json`; Firefox follows the GTK mode plus portal and gets
+traffic lights from the skeleton profile at `/etc/skel/.mozilla/firefox`
 (native Firefox reads `~/.mozilla`, not `~/.config`).
+The system-wide theme push itself is `tontoo-theme-apply`
+(`theme.service` at login, also called by Settings after a toggle):
+one source (`~/.config/tontoo/theme.conf`) for gsettings, GTK
+`settings.ini` files, qt5ct/qt6ct configs and the portal color-scheme.
 
 ### Known limitations
 

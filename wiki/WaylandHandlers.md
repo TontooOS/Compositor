@@ -105,11 +105,13 @@ Unconstrains a popup to the output geometry.
 
 ## XdgDecorationHandler
 
-The compositor defaults to **Client-Side Decorations (CSD)** so GTK/Qt
-apps draw their own MacTahoe header, but honors explicit client requests
-(KWin-style negotiation). A client that requests `ServerSide` (Chrome
-with "Use system title bar", VSCode with native title bar) gets a
-compositor-drawn traffic-light titlebar, see [WindowControls.md](WindowControls.md).
+The compositor defaults to **Client-Side Decorations (CSD)** so every
+app draws its own header from the system theme (MacTahoe for GTK, qt5ct
+palette for Qt, portal color-scheme for Chrome/Firefox/Electron).
+`request_mode` honors an explicit client wish for `ServerSide`
+(KWin-style, strictly opt-in, e.g. Chrome with "Use system title bar").
+Nothing is ever forced, so CSD apps can not lose their header.
+See [WindowControls.md](WindowControls.md).
 
 ### new_decoration
 
@@ -117,8 +119,7 @@ compositor-drawn traffic-light titlebar, see [WindowControls.md](WindowControls.
 fn new_decoration(&mut self, toplevel: ToplevelSurface)
 ```
 
-Sets the decoration mode to `ClientSide` with a default size of 800x500,
-except for apps on the SSD enforcement list (always `ServerSide`).
+Sets the decoration mode to `ClientSide` with a default size of 800x500.
 
 ### request_mode
 
@@ -126,16 +127,14 @@ except for apps on the SSD enforcement list (always `ServerSide`).
 fn request_mode(&mut self, toplevel: ToplevelSurface, mode: Mode)
 ```
 
-Honors the requested mode and sends a configure, except for apps on the
-SSD enforcement list (`shell::ssd::FORCE_SSD_APP_IDS`: Chrome, Firefox,
-VSCode and friends draw foreign headers, so they always get
-`ServerSide`). `ServerSide` activates the compositor titlebar;
-`ClientSide` keeps app-drawn decorations.
+Honors the requested mode and sends a configure. `ServerSide` activates
+the compositor traffic-light titlebar; `ClientSide` keeps app-drawn
+decorations.
 
 ### unset_mode
 
-Falls back to the enforced/default mode (`ServerSide` for listed apps,
-`ClientSide` otherwise) and sends a configure.
+Sets the decoration mode to `ClientSide` and sends a configure (previously
+cleared the mode).
 
 ## WlrLayerShellHandler
 
