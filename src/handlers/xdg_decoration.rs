@@ -16,8 +16,7 @@ impl XdgDecorationHandler for TontooCompositor {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
         // Default to ClientSide: every app draws its own header from the
         // system theme (MacTahoe for GTK, qt5ct palette for Qt, portal
-        // color-scheme for Chrome/Firefox/Electron). A client that
-        // explicitly wants server-side decorations requests it below.
+        // color-scheme for Chrome/Firefox/Electron).
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(Mode::ClientSide);
             state.size = Some(Size::from((DEFAULT_WIDTH, DEFAULT_HEIGHT)));
@@ -26,12 +25,14 @@ impl XdgDecorationHandler for TontooCompositor {
     }
 
     fn request_mode(&mut self, toplevel: ToplevelSurface, mode: Mode) {
-        // Honor the explicit client request (KWin-style negotiation).
-        // ServerSide is strictly opt-in (e.g. Chrome with "Use system
-        // title bar"); nothing is ever forced, so CSD apps can not lose
-        // their header.
+        // Force ClientSide no matter what the client requests: every app
+        // draws its own header from the system theme (MacTahoe for GTK,
+        // qt5ct palette for Qt, portal color-scheme for
+        // Chrome/Firefox/Electron). The SSD bar in `shell::ssd` stays
+        // dormant as a fallback and is never activated.
+        let _ = mode;
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(mode);
+            state.decoration_mode = Some(Mode::ClientSide);
         });
         toplevel.send_configure();
     }

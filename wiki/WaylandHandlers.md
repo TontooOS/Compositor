@@ -105,12 +105,9 @@ Unconstrains a popup to the output geometry.
 
 ## XdgDecorationHandler
 
-The compositor defaults to **Client-Side Decorations (CSD)** so every
-app draws its own header from the system theme (MacTahoe for GTK, qt5ct
-palette for Qt, portal color-scheme for Chrome/Firefox/Electron).
-`request_mode` honors an explicit client wish for `ServerSide`
-(KWin-style, strictly opt-in, e.g. Chrome with "Use system title bar").
-Nothing is ever forced, so CSD apps can not lose their header.
+The compositor forces **Client-Side Decorations (CSD)**: every app draws
+its own header from the system theme (MacTahoe for GTK, qt5ct palette
+for Qt, portal color-scheme for Chrome/Firefox/Electron).
 See [WindowControls.md](WindowControls.md).
 
 ### new_decoration
@@ -127,9 +124,9 @@ Sets the decoration mode to `ClientSide` with a default size of 800x500.
 fn request_mode(&mut self, toplevel: ToplevelSurface, mode: Mode)
 ```
 
-Honors the requested mode and sends a configure. `ServerSide` activates
-the compositor traffic-light titlebar; `ClientSide` keeps app-drawn
-decorations.
+Ignores the requested mode and always answers `ClientSide`, so no app
+can end up without its own header. The `shell::ssd` titlebar code stays
+dormant as a fallback.
 
 ### unset_mode
 

@@ -4,11 +4,9 @@ The window controls module implements macOS-style traffic light buttons
 (close, minimize, maximize) rendered in the top-left corner of each window.
 
 GTK/Qt apps use client-side decorations and draw their own MacTahoe
-header. Windows that explicitly negotiate `ServerSide` via
-xdg-decoration (e.g. Chrome with "Use system title bar" enabled by the
-user) get a compositor-drawn titlebar from the `shell::ssd` module
-below, which reuses the geometry and pixel helpers documented here.
-Server-side is strictly opt-in; nothing is ever forced.
+header. The compositor forces `ClientSide` for every window, so the
+`shell::ssd` titlebar module below is currently dormant (kept as a
+fallback); it reuses the geometry and pixel helpers documented here.
 
 ## Server-Side Decorations (`shell::ssd`)
 

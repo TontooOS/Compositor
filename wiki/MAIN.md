@@ -69,6 +69,10 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-10: Force ClientSide decorations — `request_mode` ignores the
+  client wish and always answers `ClientSide`, so every app draws its
+  own header from the system theme; the `shell::ssd` bar stays dormant
+  as a fallback. See [WaylandHandlers.md](WaylandHandlers.md).
 - 2026-09-10: Default wallpaper moved to `/System/User/Wallpapers/`
   (`THAOELAKE/IMAGE.png`); `TONTOO_WALLPAPER` still overrides, legacy
   `/usr/share/tontoo/wallpapers` path kept as fallback. See
