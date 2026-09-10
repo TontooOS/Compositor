@@ -182,10 +182,19 @@ impl TontooCompositor {
         let wallpaper_path = std::env::var("TONTOO_WALLPAPER")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
+                let canonical = PathBuf::from("/System/User/Wallpapers/THAOELAKE/IMAGE.png");
+                if canonical.exists() {
+                    return canonical;
+                }
+                // Legacy ISO layout kept as fallback (now a symlink to the
+                // canonical location, see BaseOS/scripts/stage-wallpapers.sh).
                 let mut p = PathBuf::from("/usr/share/tontoo/wallpapers");
                 p.push("THAOELAKE");
                 p.push("IMAGE.png");
-                p
+                if p.exists() {
+                    return p;
+                }
+                canonical
             });
 
         let wallpaper = Wallpaper::load(&wallpaper_path).ok();

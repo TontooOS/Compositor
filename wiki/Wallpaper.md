@@ -45,7 +45,11 @@ The wallpaper path is determined at startup:
 
 1. If the `TONTOO_WALLPAPER` environment variable is set, that path is used.
 2. Otherwise the default path is
-   `/usr/share/tontoo/wallpapers/THAOELAKE/IMAGE.png`.
+   `/System/User/Wallpapers/THAOELAKE/IMAGE.png`.
+
+> **Note:** the legacy path `/usr/share/tontoo/wallpapers/THAOELAKE/IMAGE.png`
+> resolves to the same file through a compatibility symlink kept by the ISO
+> build (`BaseOS/scripts/stage-wallpapers.sh`).
 
 If loading fails, the compositor logs a warning and uses the clear color as the
 background.

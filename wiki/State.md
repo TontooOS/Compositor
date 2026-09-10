@@ -60,7 +60,7 @@ sequence is:
 5. Apply the color scheme to environment variables.
 6. Load accessibility settings from `tontoo/accessibility.json`.
 7. Load the wallpaper from the `TONTOO_WALLPAPER` env var or the default path
-   `/usr/share/tontoo/wallpapers/THAOELAKE/IMAGE.png`.
+   `/System/User/Wallpapers/THAOELAKE/IMAGE.png`.
 8. Initialize the Wayland listening socket and register it on the event loop.
 9. Create the `RenderCache` and load the system font.
 

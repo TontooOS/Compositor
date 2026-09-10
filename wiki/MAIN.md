@@ -69,6 +69,10 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-10: Default wallpaper moved to `/System/User/Wallpapers/`
+  (`THAOELAKE/IMAGE.png`); `TONTOO_WALLPAPER` still overrides, legacy
+  `/usr/share/tontoo/wallpapers` path kept as fallback. See
+  [Wallpaper.md](Wallpaper.md) and [State.md](State.md).
 - 2026-09-10: CSD-first theming, enforcement removed — the compositor
   never forces decorations again (`request_mode` only honors explicit
   opt-in); one central theme push instead: `tontoo-theme-apply`
