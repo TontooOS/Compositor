@@ -4,9 +4,9 @@
 //! JSON object per line, replies are `{"ok":true,"result":...}` or
 //! `{"ok":false,"error":"..."}` (see CoreWindows `wiki/Windows.md`).
 //!
-//! Ops: `ping`, `list_windows`, `minimize_window`, `set_fullscreen`,
-//! `close_window`. Force quit needs no daemon op: CoreWindows sends
-//! `SIGKILL` to the reported pid directly.
+//! Ops: `ping`, `list_windows`, `minimize_window`, `restore_window`,
+//! `set_fullscreen`, `close_window`. Force quit needs no daemon op:
+//! CoreWindows sends `SIGKILL` to the reported pid directly.
 //!
 //! The listener is a calloop [`Generic`] source, so requests run inside the
 //! compositor event loop with direct `&mut` access to the space. Client
@@ -154,6 +154,10 @@ fn dispatch(state: &mut TontooCompositor, request: &serde_json::Value) -> Result
             crate::shell::ssd::minimize_to_dock(state, &window, name);
             Ok(serde_json::Value::Null)
         }
+        "restore_window" => {
+            restore_window(state, window_arg(request)?)?;
+            Ok(serde_json::Value::Null)
+        }
         "set_fullscreen" => {
             let window = find_window(state, window_arg(request)?)?;
             let fullscreen = request
@@ -205,14 +209,49 @@ fn find_window(state: &mut TontooCompositor, id: u64) -> Result<Window, String> 
     Err(format!("unknown window: {id}"))
 }
 
+/// Restore a minimized window by daemon id: re-map it centered, raise it
+/// and drop the temporary dock icon (same path as clicking the internal
+/// dock icon). Errors when the id is not a minimized window, or when its
+/// client is gone (the stale entry is dropped then).
+fn restore_window(state: &mut TontooCompositor, id: u64) -> Result<(), String> {
+    // Snapshot candidates first: resolving the id needs `&mut state`.
+    let candidates: Vec<(String, Window)> = state
+        .minimized_windows
+        .iter()
+        .map(|(name, window)| (name.clone(), window.clone()))
+        .collect();
+    let mut target: Option<(String, Window)> = None;
+    for (name, window) in &candidates {
+        if ipc_id(state, window) == Some(id) {
+            target = Some((name.clone(), window.clone()));
+            break;
+        }
+    }
+    let Some((name, window)) = target else {
+        return Err(format!("no minimized window: {id}"));
+    };
+    let surface = window_wl_surface_any(&window).map(|s| s.id());
+    if !crate::shell::ssd::restore_minimized(state, &window, &name) {
+        crate::shell::ssd::untrack_minimized(state, &name, surface.as_ref());
+        return Err(format!("window client is gone: {id}"));
+    }
+    crate::shell::ssd::untrack_minimized(state, &name, surface.as_ref());
+    Ok(())
+}
+
 fn list_windows(state: &mut TontooCompositor) -> Vec<serde_json::Value> {
     // Include minimized windows: they are unmapped but still open.
-    let mut ordered: Vec<Window> = state.space.elements().cloned().collect();
-    ordered.extend(state.minimized_windows.iter().map(|(_, w)| w.clone()));
+    // Minimized rows carry `"minimized": true` (mapped rows omit the key).
+    let mapped: Vec<Window> = state.space.elements().cloned().collect();
+    let minimized: Vec<Window> = state.minimized_windows.iter().map(|(_, w)| w.clone()).collect();
 
     let mut seen_surfaces = HashSet::new();
     let mut rows = Vec::new();
-    for window in ordered {
+    for (window, is_minimized) in mapped
+        .into_iter()
+        .map(|w| (w, false))
+        .chain(minimized.into_iter().map(|w| (w, true)))
+    {
         let Some(surface) = window_wl_surface_any(&window) else {
             continue;
         };
@@ -224,6 +263,9 @@ fn list_windows(state: &mut TontooCompositor) -> Vec<serde_json::Value> {
             None => continue,
         };
         let mut row = serde_json::json!({"id": id});
+        if is_minimized {
+            row["minimized"] = serde_json::Value::Bool(true);
+        }
         if let Some(app_id) = window_app_id(&window) {
             row["app_id"] = serde_json::Value::String(app_id);
         }

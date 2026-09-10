@@ -1,7 +1,7 @@
 # WindowsIpc
 
 Unix socket IPC serving CoreWindows: window listing and actions
-(minimize, fullscreen, graceful close). Implemented in
+(minimize, restore, fullscreen, graceful close). Implemented in
 `src/windows_ipc.rs`, initialized once in `main.rs` after state
 creation, shared by the winit and udev backends.
 
@@ -40,8 +40,9 @@ forever.
 | Op | Request | Effect |
 |---|---|---|
 | `ping` | `{"id":1,"op":"ping"}` | Answers `{"pong":true}` |
-| `list_windows` | `{"id":1,"op":"list_windows"}` | All mapped windows plus minimized ones: `{"windows":[{"id":1,"app_id":"...","title":"...","pid":1234}]}` (all fields but `id` optional) |
+| `list_windows` | `{"id":1,"op":"list_windows"}` | All mapped windows plus minimized ones: `{"windows":[{"id":1,"app_id":"...","title":"...","pid":1234}]}` (all fields but `id` optional; minimized rows carry `"minimized":true`) |
 | `minimize_window` | `{"id":1,"op":"minimize_window","window":5}` | Reuses `shell::ssd::minimize_to_dock` (unmap + dock icon, restore via dock click) |
+| `restore_window` | `{"id":1,"op":"restore_window","window":5}` | Restores a minimized window (re-map centered + focus, drop temp dock icon) via `shell::ssd::restore_minimized`; errors when the id is not minimized or its client is gone |
 | `set_fullscreen` | `{"id":1,"op":"set_fullscreen","window":5,"fullscreen":true}` | Wayland: `XdgState::Fullscreen` + output-size configure, geometry saved in `fullscreen_restore` and restored on exit. X11: `X11Surface::set_fullscreen` |
 | `close_window` | `{"id":1,"op":"close_window","window":5}` | Graceful close: `xdg_toplevel.send_close` on Wayland, `WM_DELETE_WINDOW` (`X11Surface::close`) on X11. The app may show a save dialog |
 

@@ -547,3 +547,70 @@ pub fn minimize_to_dock(state: &mut TontooCompositor, window: &Window, name: Str
         }
     }
 }
+
+/// Restore a window minimized to the dock: re-map it centered on the
+/// primary output, raise it, mark it focused and active. Does NOT touch
+/// `minimized_windows` / `minimized_icons`: the caller drops the entry
+/// via [`untrack_minimized`] (shared by dock-icon clicks and the
+/// `restore_window` IPC op).
+/// Returns `false` when the client is gone (stale entry).
+pub fn restore_minimized(
+    state: &mut TontooCompositor,
+    window: &Window,
+    name: &str,
+) -> bool {
+    let alive = window
+        .toplevel()
+        .map(|t| t.wl_surface().is_alive())
+        .unwrap_or(false);
+    if !alive {
+        return false;
+    }
+    let size = window.geometry().size;
+    let loc = center_on_output(state, size);
+    state.space.map_element(window.clone(), loc, true);
+    state.space.raise_element(window, true);
+    if let Some(toplevel) = window.toplevel() {
+        let surface = toplevel.wl_surface().clone();
+        state.focused_surface = Some(surface);
+        toplevel.send_pending_configure();
+    }
+    state.shell.dock.set_active_app(name);
+    true
+}
+
+/// Drop a `minimized_windows` entry and its temporary dock icon (if any).
+/// `surface` selects the exact entry; `None` drops every entry with `name`.
+pub fn untrack_minimized(
+    state: &mut TontooCompositor,
+    name: &str,
+    surface: Option<&ObjectId>,
+) {
+    state.minimized_windows.retain(|(n, w)| {
+        if n != name {
+            return true;
+        }
+        match (surface, w.toplevel()) {
+            (Some(expected), Some(toplevel)) => &toplevel.wl_surface().id() != expected,
+            _ => false,
+        }
+    });
+    if state.minimized_icons.remove(name) {
+        state.shell.dock.remove_icon(name);
+    }
+}
+
+/// Center a window of the given size on the primary output.
+fn center_on_output(state: &TontooCompositor, size: Size<i32, Logical>) -> Point<i32, Logical> {
+    let (out_loc, out_size) = state
+        .space
+        .outputs()
+        .next()
+        .and_then(|o| state.space.output_geometry(o))
+        .map(|g| (g.loc, g.size))
+        .unwrap_or((Point::from((0, 0)), Size::from((800, 600))));
+    Point::from((
+        out_loc.x + (out_size.w - size.w).max(0) / 2,
+        out_loc.y + (out_size.h - size.h).max(0) / 2,
+    ))
+}

@@ -200,29 +200,23 @@ impl TontooCompositor {
                             .position(|(n, _)| *n == icon_name)
                         {
                             let (name, window) = self.minimized_windows.remove(min_idx);
-                            let alive = window
-                                .toplevel()
-                                .map(|t| t.wl_surface().is_alive())
-                                .unwrap_or(false);
-                            if alive {
+                            if crate::shell::ssd::restore_minimized(self, &window, &name) {
                                 tracing::info!("Dock: restoring minimized '{}'", name);
-                                let size = window.geometry().size;
-                                let loc = Self::center_on_output(&self.space, size);
-                                self.space.map_element(window.clone(), loc, true);
-                                self.space.raise_element(&window, true);
-                                let window_surface =
-                                    window.toplevel().unwrap().wl_surface().clone();
-                                keyboard.set_focus(
-                                    self,
-                                    Some(window_surface.clone()),
-                                    serial,
-                                );
-                                window.toplevel().unwrap().send_pending_configure();
-                                self.focused_surface = Some(window_surface);
-                                self.shell.dock.set_active_app(&name);
-                                if self.minimized_icons.remove(&name) {
-                                    self.shell.dock.remove_icon(&name);
+                                if let Some(toplevel) = window.toplevel() {
+                                    keyboard.set_focus(
+                                        self,
+                                        Some(toplevel.wl_surface().clone()),
+                                        serial,
+                                    );
                                 }
+                                crate::shell::ssd::untrack_minimized(
+                                    self,
+                                    &name,
+                                    window
+                                        .toplevel()
+                                        .map(|t| t.wl_surface().id())
+                                        .as_ref(),
+                                );
                                 self.pending_redraw = true;
                                 let _ = self.loop_signal.wakeup();
                                 return;
@@ -650,23 +644,6 @@ impl TontooCompositor {
             self.pending_redraw = true;
             let _ = self.loop_signal.wakeup();
         }
-    }
-
-    /// Center a window of the given size on the primary output.
-    fn center_on_output(
-        space: &smithay::desktop::Space<smithay::desktop::Window>,
-        size: Size<i32, Logical>,
-    ) -> Point<i32, Logical> {
-        let (out_loc, out_size) = space
-            .outputs()
-            .next()
-            .and_then(|o| space.output_geometry(o))
-            .map(|g| (g.loc, g.size))
-            .unwrap_or((Point::from((0, 0)), Size::from((800, 600))));
-        Point::from((
-            out_loc.x + (out_size.w - size.w).max(0) / 2,
-            out_loc.y + (out_size.h - size.h).max(0) / 2,
-        ))
     }
 
     /// Track pointer hover over tontoo_ui surfaces and send widget_hovered events.
