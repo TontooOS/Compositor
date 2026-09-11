@@ -9,6 +9,7 @@ mod protocol;
 pub mod render_cache;
 mod shaders;
 pub mod shell;
+mod settings_ipc;
 mod state;
 mod texture_cache;
 mod wallpaper;
@@ -79,6 +80,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A bind failure is not fatal: the desktop runs without IPC.
     if let Err(e) = windows_ipc::init(&mut event_loop) {
         tracing::warn!("windows-ipc unavailable: {:?}", e);
+    }
+
+    // Desktop settings for the Settings daemon (wallpaper now, display
+    // and more later). A bind failure is not fatal either.
+    if let Err(e) = settings_ipc::init(&mut event_loop) {
+        tracing::warn!("settings-ipc unavailable: {:?}", e);
     }
 
     if use_udev {

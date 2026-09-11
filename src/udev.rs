@@ -230,6 +230,7 @@ pub fn init_udev(
                 }
                 if state.pending_redraw
                     || state.animation_manager.has_active()
+                    || state.wallpaper_fade.is_some()
                 {
                     crate::udev::try_render_all(state);
                 } else {
@@ -618,11 +619,18 @@ pub fn try_render_all(state: &mut TontooCompositor) {
     // the render pump re-sets this when new input or Wayland commits arrive.
     state.pending_redraw = false;
 
+    // Promote finished wallpaper fades before building elements.
+    let now = std::time::Instant::now();
+    state.finish_wallpaper_fade_if_done(now);
+    let fade_alpha = state.wallpaper_fade_alpha(now);
+
     // Split field borrows to avoid conflicts when passing multiple refs
     let space = &state.space;
     let cursor = &mut state.cursor;
     let wallpaper = state.wallpaper.as_ref();
     let wallpaper_buffer = &mut state.wallpaper_buffer;
+    let wallpaper_fade = state.wallpaper_fade.as_ref();
+    let wallpaper_fade_buffer = &mut state.wallpaper_fade_buffer;
     let seat = &state.seat;
     let render_cache = &mut state.render_cache;
     let tontoo_ui = &state.tontoo_ui;
@@ -648,6 +656,9 @@ pub fn try_render_all(state: &mut TontooCompositor) {
                 Some(cursor),
                 pointer_pos,
                 wallpaper_buffer,
+                wallpaper_fade,
+                wallpaper_fade_buffer,
+                fade_alpha,
                 render_cache,
                 tontoo_ui,
                 state.focused_surface.as_ref(),
@@ -694,6 +705,7 @@ fn wallpaper_buffer_to_element(
     buffer: &TextureBuffer<GlesTexture>,
     wallpaper: &Wallpaper,
     output_size: Size<i32, Physical>,
+    alpha: Option<f32>,
 ) -> TextureRenderElement<GlesTexture> {
     let (wp_w, wp_h) = wallpaper.size();
     let scale_x = output_size.w as f64 / wp_w as f64;
@@ -710,7 +722,7 @@ fn wallpaper_buffer_to_element(
     TextureRenderElement::from_texture_buffer(
         Point::from((offset_x, offset_y)),
         buffer,
-        None,
+        alpha,
         Some(src),
         Some(Size::from((scaled_w, scaled_h))),
         Kind::Unspecified,
@@ -891,6 +903,9 @@ fn render_surface(
     cursor: Option<&mut crate::cursor::CursorState>,
     pointer_pos: Option<smithay::utils::Point<f64, smithay::utils::Logical>>,
     wallpaper_buffer: &mut Option<TextureBuffer<GlesTexture>>,
+    wallpaper_fade: Option<&crate::wallpaper::WallpaperFade>,
+    wallpaper_fade_buffer: &mut Option<TextureBuffer<GlesTexture>>,
+    fade_alpha: Option<f32>,
     render_cache: &mut crate::render_cache::RenderCache,
     tontoo_ui: &crate::handlers::tontoo_ui::TontooUiState,
     focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
@@ -1136,8 +1151,19 @@ fn render_surface(
             *wallpaper_buffer = create_wallpaper_buffer(renderer, wp);
         }
         if let Some(ref buf) = wallpaper_buffer {
-            let wp_element = wallpaper_buffer_to_element(buf, wp, output_size);
+            let wp_element = wallpaper_buffer_to_element(buf, wp, output_size, None);
             all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(wp_element)));
+        }
+    }
+    // 2b. Crossfade overlay: incoming wallpaper directly above the old one.
+    if let (Some(fade), Some(alpha)) = (wallpaper_fade, fade_alpha) {
+        if wallpaper_fade_buffer.is_none() {
+            *wallpaper_fade_buffer = create_wallpaper_buffer(renderer, &fade.next);
+        }
+        if let Some(ref buf) = wallpaper_fade_buffer {
+            let fx_element =
+                wallpaper_buffer_to_element(buf, &fade.next, output_size, Some(alpha));
+            all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(fx_element)));
         }
     }
 

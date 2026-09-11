@@ -94,6 +94,9 @@ pub fn init_winit(
                     let dt = now.duration_since(last_tick);
                     last_tick = now;
                     state.animation_manager.tick(dt);
+                    // Promote finished wallpaper fades before building elements.
+                    state.finish_wallpaper_fade_if_done(now);
+                    let fade_alpha = state.wallpaper_fade_alpha(now);
 
                     let size = backend.window_size();
                     let screen_w = size.w as f32;
@@ -120,6 +123,8 @@ pub fn init_winit(
                         // Wallpaper: use cached GPU buffer if available
                         let wallpaper = state.wallpaper.as_ref();
                         let wallpaper_buffer = &mut state.wallpaper_buffer;
+                        let wallpaper_fade = state.wallpaper_fade.as_ref();
+                        let wallpaper_fade_buffer = &mut state.wallpaper_fade_buffer;
                         let wallpaper_element: Option<TextureRenderElement<GlesTexture>> =
                             wallpaper.and_then(|wp| {
                                 let output_size = Size::from((size.w as i32, size.h as i32));
@@ -128,8 +133,28 @@ pub fn init_winit(
                                 }
                                 wallpaper_buffer
                                     .as_ref()
-                                    .map(|buf| winit_wallpaper_from_buffer(buf, wp, output_size))
+                                    .map(|buf| winit_wallpaper_from_buffer(buf, wp, output_size, None))
                             });
+                        // Crossfade overlay: incoming wallpaper on top with eased alpha.
+                        let wallpaper_fade_element: Option<TextureRenderElement<GlesTexture>> =
+                            match (wallpaper_fade, fade_alpha) {
+                                (Some(fade), Some(alpha)) => {
+                                    let output_size = Size::from((size.w as i32, size.h as i32));
+                                    if wallpaper_fade_buffer.is_none() {
+                                        *wallpaper_fade_buffer =
+                                            create_winit_wallpaper_buffer(renderer, &fade.next);
+                                    }
+                                    wallpaper_fade_buffer.as_ref().map(|buf| {
+                                        winit_wallpaper_from_buffer(
+                                            buf,
+                                            &fade.next,
+                                            output_size,
+                                            Some(alpha),
+                                        )
+                                    })
+                                }
+                                _ => None,
+                            };
 
                         let pointer_pos = state.seat.get_pointer().map(|p| p.current_location());
 
@@ -154,6 +179,10 @@ pub fn init_winit(
                         // Wallpaper (bottommost)
                         if let Some(wp) = wallpaper_element {
                             all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(wp)));
+                        }
+                        // Crossfade overlay directly above the old wallpaper.
+                        if let Some(fx) = wallpaper_fade_element {
+                            all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(fx)));
                         }
 
                         // Layer-shell surfaces below windows (Background/Bottom layers).
@@ -383,6 +412,10 @@ pub fn init_winit(
                     state.space.refresh();
                     state.popups.cleanup();
                     let _ = state.display_handle.flush_clients();
+                    // Keep frames coming until a wallpaper crossfade finishes.
+                    if state.wallpaper_fade.is_some() {
+                        backend.window().request_redraw();
+                    }
                 }
                 WinitEvent::CloseRequested => {
                     state.loop_signal.stop();
@@ -415,6 +448,7 @@ fn winit_wallpaper_from_buffer(
     buffer: &TextureBuffer<GlesTexture>,
     wallpaper: &Wallpaper,
     output_size: Size<i32, Physical>,
+    alpha: Option<f32>,
 ) -> TextureRenderElement<GlesTexture> {
     let (wp_w, wp_h) = wallpaper.size();
     let scale_x = output_size.w as f64 / wp_w as f64;
@@ -429,7 +463,7 @@ fn winit_wallpaper_from_buffer(
     TextureRenderElement::from_texture_buffer(
         Point::from((offset_x, offset_y)),
         buffer,
-        None,
+        alpha,
         None,
         Some(Size::from((scaled_w, scaled_h))),
         Kind::Unspecified,

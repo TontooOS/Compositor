@@ -42,6 +42,7 @@ it is the external `Dock.app` system app (see [Dock.md](Dock.md)).
 | UdevBackend | [UdevBackend.md](UdevBackend.md) | Udev/DRM/libseat backend |
 | XWayland | [XWayland.md](XWayland.md) | X11 apps via embedded XWayland server + window manager |
 | WindowsIpc | [WindowsIpc.md](WindowsIpc.md) | CoreWindows socket: window listing and actions |
+| SettingsIpc | [SettingsIpc.md](SettingsIpc.md) | Settings daemon socket: extensible settings ops |
 | Shaders | [Shaders.md](Shaders.md) | Gaussian blur GLSL shaders |
 
 ## Quick Start
@@ -70,6 +71,12 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-11: Settings socket plus wallpaper crossfade — new
+  `settings_ipc` (`COMPOSITOR_SOCKET` or `/run/tontoo-compositor.sock`,
+  extensible op table: `ping`, `set_wallpaper`, display/theme later).
+  `set_wallpaper` starts a macOS-like 450ms GPU crossfade (smoothstep
+  alpha overlay on both backends, buffers swapped on finish). See
+  [SettingsIpc.md](SettingsIpc.md) and [Wallpaper.md](Wallpaper.md).
 - 2026-09-10: Single-click window focus — a click on a window now
   focuses, raises and activates it in one press (the click is forwarded
   to the client). The previous 2-click model (first click only focuses)

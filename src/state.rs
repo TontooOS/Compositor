@@ -1,10 +1,12 @@
 use crate::protocol;
+use crate::wallpaper::{fade_eased, fade_progress, WallpaperFade, FADE_DURATION};
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
     os::unix::fs::PermissionsExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use smithay::{
@@ -76,6 +78,13 @@ pub struct TontooCompositor {
     pub wallpaper: Option<Wallpaper>,
     pub wallpaper_path: PathBuf,
     pub wallpaper_buffer: Option<TextureBuffer<GlesTexture>>,
+
+    /// Running crossfade to a new wallpaper (macOS-like fade). The old
+    /// wallpaper renders underneath at full alpha, `next` on top with the
+    /// eased progress alpha until it takes over.
+    pub wallpaper_fade: Option<WallpaperFade>,
+    /// GPU upload of the fade target, created lazily on the next frame.
+    pub wallpaper_fade_buffer: Option<TextureBuffer<GlesTexture>>,
 
     pub texture_cache: TextureCache,
 
@@ -232,6 +241,8 @@ impl TontooCompositor {
             wallpaper,
             wallpaper_path,
             wallpaper_buffer: None,
+            wallpaper_fade: None,
+            wallpaper_fade_buffer: None,
             texture_cache: TextureCache::new(),
             widget_renderer: WidgetRenderer::new(),
             animation_manager: crate::animation::AnimationManager::new(),
@@ -375,6 +386,57 @@ impl TontooCompositor {
 
     pub fn request_redraw(&mut self) {
         self.pending_redraw = true;
+    }
+
+    /// Start a crossfade to a new wallpaper file. The image loads (and
+    /// downscales) synchronously; failures leave the current wallpaper
+    /// untouched. Frames keep coming until the fade finishes.
+    pub fn set_wallpaper(&mut self, path: &Path) -> Result<(), String> {
+        let next = Wallpaper::load(path)
+            .map_err(|e| format!("cannot load wallpaper {}: {e}", path.display()))?;
+        self.wallpaper_fade = Some(WallpaperFade {
+            next,
+            path: path.to_path_buf(),
+            start: Instant::now(),
+        });
+        self.wallpaper_fade_buffer = None;
+        tracing::info!("wallpaper crossfade started: {}", path.display());
+        self.request_redraw();
+        Ok(())
+    }
+
+    /// Eased fade alpha, or `None` when no crossfade is running.
+    pub fn wallpaper_fade_alpha(&self, now: Instant) -> Option<f32> {
+        self.wallpaper_fade.as_ref().map(|fade| {
+            fade_eased(fade_progress(now.duration_since(fade.start)))
+        })
+    }
+
+    /// Promote the fade target to the current wallpaper once its duration
+    /// elapsed, swapping the GPU buffers so no re-upload is needed.
+    pub fn finish_wallpaper_fade_if_done(&mut self, now: Instant) {
+        let done = self
+            .wallpaper_fade
+            .as_ref()
+            .map(|fade| now.duration_since(fade.start) >= FADE_DURATION)
+            .unwrap_or(false);
+        if !done {
+            return;
+        }
+        if let Some(fade) = self.wallpaper_fade.take() {
+            self.wallpaper = Some(fade.next);
+            self.wallpaper_path = fade.path.clone();
+            if self.wallpaper_fade_buffer.is_some() {
+                self.wallpaper_buffer = self.wallpaper_fade_buffer.take();
+            } else {
+                self.wallpaper_buffer = None;
+            }
+            tracing::info!(
+                "wallpaper crossfade finished: {}",
+                self.wallpaper_path.display()
+            );
+            self.request_redraw();
+        }
     }
 
     /// Tick the animation manager and trigger a redraw if animations are still active.

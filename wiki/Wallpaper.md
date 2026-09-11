@@ -54,6 +54,23 @@ The wallpaper path is determined at startup:
 If loading fails, the compositor logs a warning and uses the clear color as the
 background.
 
+## Runtime Switching
+
+`TontooCompositor::set_wallpaper` starts a macOS-like 450ms crossfade to
+a new image file: the old wallpaper renders underneath at full alpha,
+the incoming one on top with the eased (smoothstep) progress alpha,
+then it takes over (GPU buffers swapped, no re-upload). Failures leave
+the current wallpaper untouched. Both backends drive frames until the
+fade finishes (udev render timer, winit redraw requests).
+
+```rust
+pub fn set_wallpaper(&mut self, path: &Path) -> Result<(), String>
+pub fn wallpaper_fade_alpha(&self, now: Instant) -> Option<f32>
+pub fn finish_wallpaper_fade_if_done(&mut self, now: Instant)
+```
+
+Set remotely via [SettingsIpc.md](SettingsIpc.md) (`set_wallpaper`).
+
 ## Usage
 
 The render pipeline uploads the wallpaper to a GPU `TextureBuffer` once, then
@@ -64,3 +81,4 @@ reuses it on every frame. The wallpaper is scaled to fill the output using a
 
 - [State.md](State.md) -- `TontooCompositor::wallpaper` and `wallpaper_path` fields
 - [Rendering.md](Rendering.md) -- wallpaper is the bottommost render layer
+- [SettingsIpc.md](SettingsIpc.md) -- `set_wallpaper` remote op
