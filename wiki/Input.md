@@ -51,9 +51,12 @@ On button press, the following elements are checked in order:
    server-side-decorated windows (opt-in only, see CSD note above).
 
 3. **Window focus**: a click on a window raises it, sets keyboard
-   focus, and passes the click through to the application in the same
-   press (single-click select + activate, macOS behavior). On click on
-   empty space, deactivates all windows.
+   focus, activates it (`set_activated(true)`, all others deactivated)
+   and passes the click through to the application in the same press
+   (single-click select + activate, macOS behavior). CSD clients use
+   the activation state for their header: the focused window renders
+   colored traffic lights, the rest gray. On click on empty space,
+   deactivates all windows.
 
 > **Removed:** Window traffic light clicks and titlebar drag are no longer
 > handled here — windows use Client-Side Decorations. Move is via the

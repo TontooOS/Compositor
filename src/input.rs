@@ -331,6 +331,13 @@ impl TontooCompositor {
                                     window_app_name(&window).unwrap_or_default());
 
                                 self.space.raise_element(&window, true);
+                                // Activate the clicked window and deactivate
+                                // the rest, so CSD clients render the active
+                                // state (colored traffic lights).
+                                self.space.elements().for_each(|w| {
+                                    w.set_activated(false);
+                                });
+                                window.set_activated(true);
                                 keyboard.set_focus(
                                     self,
                                     Some(window_surface.clone()),

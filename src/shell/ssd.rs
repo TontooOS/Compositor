@@ -557,6 +557,10 @@ pub fn restore_minimized(
     let loc = center_on_output(state, size);
     state.space.map_element(window.clone(), loc, true);
     state.space.raise_element(window, true);
+    state.space.elements().for_each(|w| {
+        w.set_activated(false);
+    });
+    window.set_activated(true);
     if let Some(toplevel) = window.toplevel() {
         let surface = toplevel.wl_surface().clone();
         state.focused_surface = Some(surface);

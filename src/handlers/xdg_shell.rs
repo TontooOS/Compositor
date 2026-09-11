@@ -45,7 +45,21 @@ impl XdgShellHandler for TontooCompositor {
         let window = Window::new_wayland_window(surface);
         // Place window below the reserved top strut for the external
         // Menubar.app (30px) with some padding
-        self.space.map_element(window, (30, 40), false);
+        self.space.map_element(window.clone(), (30, 40), false);
+        // The new window takes selection: deactivate the rest, activate
+        // it and give it keyboard focus so CSD clients render the
+        // active state (colored traffic lights) right away.
+        self.space.elements().for_each(|w| {
+            w.set_activated(false);
+        });
+        window.set_activated(true);
+        if let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone()) {
+            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            self.seat
+                .get_keyboard()
+                .unwrap()
+                .set_focus(self, Some(surface), serial);
+        }
         self.request_redraw();
     }
 

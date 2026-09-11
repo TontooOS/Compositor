@@ -87,6 +87,11 @@ for built-in shortcuts.
   `set_wallpaper` starts a macOS-like 450ms GPU crossfade (smoothstep
   alpha overlay on both backends, buffers swapped on finish). See
   [SettingsIpc.md](SettingsIpc.md) and [Wallpaper.md](Wallpaper.md).
+- 2026-09-10: Activate windows on focus — clicking a window (or
+  mapping / restoring one) calls `set_activated(true)` and deactivates
+  the rest, so CSD clients render the active state (colored traffic
+  lights) on the selected window. Previously nothing ever set the
+  activated state and headers stayed gray. See [Input.md](Input.md).
 - 2026-09-10: Single-click window focus — a click on a window now
   focuses, raises and activates it in one press (the click is forwarded
   to the client). The previous 2-click model (first click only focuses)
