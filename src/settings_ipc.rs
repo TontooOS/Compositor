@@ -7,7 +7,9 @@
 //! `{"ok":false,"error":"..."}` (same shape as the windows IPC).
 //!
 //! Ops: `ping`, `set_wallpaper` (`{"path": "...", "fill"?}` starts a
-//! macOS-like crossfade and switches the fill mode).
+//! macOS-like crossfade and switches the fill mode), `get_displays`
+//! (outputs with modes plus brightness/night light) and `set_display`
+//! (partial brightness/night light/refresh switch).
 //!
 //! Like the windows IPC, the listener is a calloop [`Generic`] source, so
 //! requests run inside the compositor event loop with direct `&mut` access
@@ -22,7 +24,7 @@ use std::{
 
 use smithay::reexports::calloop::{generic::Generic, EventLoop, Interest, Mode, PostAction};
 
-use crate::{wallpaper::parse_set_wallpaper_path, TontooCompositor};
+use crate::{display, wallpaper::parse_set_wallpaper_path, TontooCompositor};
 
 /// Default socket path, mirrored by the Settings daemon forwarder.
 pub const DEFAULT_SOCKET_PATH: &str = "/run/tontoo-compositor.sock";
@@ -144,6 +146,25 @@ fn dispatch(state: &mut TontooCompositor, request: &serde_json::Value) -> Result
                 "path": path.to_string_lossy(),
                 "fill": state.wallpaper_fill,
                 "fading": true,
+            }))
+        }
+        "get_displays" => {
+            let state_obj = display::DisplayState {
+                outputs: display::list_displays(state),
+                brightness: (state.display_brightness * 100.0).round() as u32,
+                night_light: state.display_night_light,
+            };
+            Ok(serde_json::to_value(state_obj).unwrap_or(serde_json::Value::Null))
+        }
+        "set_display" => {
+            let parsed = display::parse_set_display(request)?;
+            let (output, mode, brightness, night_light) =
+                display::apply_display(state, &parsed)?;
+            Ok(serde_json::json!({
+                "output": output,
+                "mode": mode,
+                "brightness": brightness,
+                "night_light": night_light,
             }))
         }
         other => Err(format!("unknown op: {other}")),

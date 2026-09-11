@@ -43,6 +43,7 @@ it is the external `Dock.app` system app (see [Dock.md](Dock.md)).
 | XWayland | [XWayland.md](XWayland.md) | X11 apps via embedded XWayland server + window manager |
 | WindowsIpc | [WindowsIpc.md](WindowsIpc.md) | CoreWindows socket: window listing and actions |
 | SettingsIpc | [SettingsIpc.md](SettingsIpc.md) | Settings daemon socket: extensible settings ops |
+| Display | [Display.md](Display.md) | Outputs, refresh switching, brightness and night light |
 | Shaders | [Shaders.md](Shaders.md) | Gaussian blur GLSL shaders |
 
 ## Quick Start
@@ -71,6 +72,11 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-11: Display settings — `get_displays` (outputs with modes,
+  brightness, night light) and `set_display` (live brightness/night
+  light overlays plus same-resolution refresh modeset on udev) over
+  the settings socket. See [Display.md](Display.md) and
+  [SettingsIpc.md](SettingsIpc.md).
 - 2026-09-11: Wallpaper fill modes — the render pipeline honors
   `fill`, `fit`, `stretch`, `center` and `tile` (destination quads from
   `wallpaper_layout` on both backends); `set_wallpaper` takes an

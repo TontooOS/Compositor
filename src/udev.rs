@@ -53,7 +53,7 @@ use crate::cursor::{
 };
 use crate::{wallpaper::Wallpaper, TontooCompositor};
 
-type TontooDrmCompositor = DrmCompositor<
+pub(crate) type TontooDrmCompositor = DrmCompositor<
     GbmAllocator<DrmDeviceFd>,
     GbmFramebufferExporter<DrmDeviceFd>,
     Option<OutputPresentationFeedback>,
@@ -637,6 +637,8 @@ pub fn try_render_all(state: &mut TontooCompositor) {
     let window_controls = &mut state.shell.window_controls;
     let color_scheme = state.color_scheme;
     let wallpaper_fill = state.wallpaper_fill.clone();
+    let display_brightness = state.display_brightness;
+    let display_night_light = state.display_night_light;
 
     let Some(udev) = state.udev_data.as_mut() else {
         return;
@@ -661,6 +663,8 @@ pub fn try_render_all(state: &mut TontooCompositor) {
                 wallpaper_fade_buffer,
                 fade_alpha,
                 &wallpaper_fill,
+                display_brightness,
+                display_night_light,
                 render_cache,
                 tontoo_ui,
                 state.focused_surface.as_ref(),
@@ -907,6 +911,8 @@ fn render_surface(
     wallpaper_fade_buffer: &mut Option<TextureBuffer<GlesTexture>>,
     fade_alpha: Option<f32>,
     wallpaper_fill: &str,
+    display_brightness: f32,
+    display_night_light: bool,
     render_cache: &mut crate::render_cache::RenderCache,
     tontoo_ui: &crate::handlers::tontoo_ui::TontooUiState,
     focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
@@ -1170,6 +1176,19 @@ fn render_surface(
     }
 
     // Render elements are composited front-to-back (first = topmost).
+    // Display overlays: brightness dim + night light warmth above
+    // content, inserted before the cursor so it stays on top.
+    for elem in crate::display::overlay_elements(
+        renderer,
+        output_size.w as f32,
+        output_size.h as f32,
+        display_brightness,
+        display_night_light,
+    ) {
+        all_elements.push(TontooRenderElements::TontooUi(
+            crate::cursor::TontooUiTextureElement(elem),
+        ));
+    }
     // Insert cursor at index 0 so it is drawn above everything.
     if let Some(e) = widget_cursor {
         all_elements.insert(0, TontooRenderElements::CursorTexture(CursorTextureElement(e)));

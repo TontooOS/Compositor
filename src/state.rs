@@ -78,6 +78,10 @@ pub struct TontooCompositor {
     pub wallpaper: Option<Wallpaper>,
     pub wallpaper_path: PathBuf,
     pub wallpaper_buffer: Option<TextureBuffer<GlesTexture>>,
+    /// Display brightness factor 0.0-1.0 (software dim overlay).
+    pub display_brightness: f32,
+    /// Night light warmth overlay on/off.
+    pub display_night_light: bool,
     /// Fill mode currently rendered (`fill`, `fit`, `stretch`, `center`,
     /// `tile`; defaults to `fill`).
     pub wallpaper_fill: String,
@@ -245,6 +249,8 @@ impl TontooCompositor {
             wallpaper_path,
             wallpaper_buffer: None,
             wallpaper_fill: crate::wallpaper::DEFAULT_FILL.to_string(),
+            display_brightness: 1.0,
+            display_night_light: false,
             wallpaper_fade: None,
             wallpaper_fade_buffer: None,
             texture_cache: TextureCache::new(),

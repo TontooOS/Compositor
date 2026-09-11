@@ -2,6 +2,7 @@ mod accessibility;
 mod animation;
 mod config;
 mod cursor;
+mod display;
 mod grabs;
 mod handlers;
 mod input;

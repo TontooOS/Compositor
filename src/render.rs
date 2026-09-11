@@ -367,6 +367,21 @@ pub fn init_winit(
                             }
                         }
 
+                        // Display overlays: brightness dim + night light
+                        // warmth above content, below the cursor.
+                        let display_brightness = state.display_brightness;
+                        let display_night_light = state.display_night_light;
+                        for elem in crate::display::overlay_elements(
+                            renderer,
+                            screen_w,
+                            screen_h,
+                            display_brightness,
+                            display_night_light,
+                        ) {
+                            all_elements.push(TontooRenderElements::TontooUi(
+                                crate::cursor::TontooUiTextureElement(elem)));
+                        }
+
                         // Cursor rendered ABOVE all content
                         if let Some(e) = widget_cursor {
                             all_elements.push(TontooRenderElements::CursorTexture(CursorTextureElement(e)));
