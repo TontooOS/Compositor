@@ -70,6 +70,10 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-10: Single-click window focus — a click on a window now
+  focuses, raises and activates it in one press (the click is forwarded
+  to the client). The previous 2-click model (first click only focuses)
+  is removed. See [Input.md](Input.md).
 - 2026-09-10: Remove the compositor-internal dock — deleted `shell::dock`
   (`Dock`, `DockIcon`, `DockAnimation`), the `DockBar` render element,
   dock glass/icon/hover textures (winit + udev), `RenderCache::{dock_panel,

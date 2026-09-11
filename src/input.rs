@@ -291,7 +291,7 @@ impl TontooCompositor {
                         }
                     }
 
-                    // ── 2. Window clicks (2-click focus behavior) ──
+                    // ── 2. Window clicks (single-click focus + activate) ──
                     if !pointer.is_grabbed() {
                         if let Some((window, _loc)) = self
                             .space
@@ -323,13 +323,11 @@ impl TontooCompositor {
             };
                             let is_same_window = self.focused_surface.as_ref() == Some(&window_surface);
 
-                            if is_same_window {
-                                // Second click on same window: pass click through to app
-                                tracing::debug!("Window second-click: passing through to '{}'",
-                                    window_app_name(&window).unwrap_or_default());
-                            } else {
-                                // First click on new window: focus it, don't pass click through
-                                tracing::info!("Window first-click: focusing '{}'",
+                            if !is_same_window {
+                                // First click on a new window: focus + raise it,
+                                // then fall through so the click also reaches
+                                // the app (single-click select + activate).
+                                tracing::info!("Window click: focusing '{}' and passing through",
                                     window_app_name(&window).unwrap_or_default());
 
                                 self.space.raise_element(&window, true);
@@ -346,8 +344,9 @@ impl TontooCompositor {
 
                                 // Track focused surface
                                 self.focused_surface = Some(window_surface.clone());
-
-                                return;
+                            } else {
+                                tracing::debug!("Window click: passing through to '{}'",
+                                    window_app_name(&window).unwrap_or_default());
                             }
                         } else {
                             // Clicked on empty space: deactivate everything

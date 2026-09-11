@@ -50,10 +50,10 @@ On button press, the following elements are checked in order:
 2. **SSD titlebar clicks**: traffic-light actions and move drags for
    server-side-decorated windows (opt-in only, see CSD note above).
 
-3. **Window focus**: on first click on a window, raises it and sets
-   keyboard focus. On second click on the same window, passes the click
-   through to the application. On click on empty space, deactivates all
-   windows.
+3. **Window focus**: a click on a window raises it, sets keyboard
+   focus, and passes the click through to the application in the same
+   press (single-click select + activate, macOS behavior). On click on
+   empty space, deactivates all windows.
 
 > **Removed:** Window traffic light clicks and titlebar drag are no longer
 > handled here — windows use Client-Side Decorations. Move is via the
