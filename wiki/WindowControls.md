@@ -65,6 +65,10 @@ The system-wide theme push itself is `tontoo-theme-apply`
 (`theme.service` at login, also called by Settings after a toggle):
 one source (`~/.config/tontoo/theme.conf`) for gsettings, GTK
 `settings.ini` files, qt5ct/qt6ct configs and the portal color-scheme.
+Per-app traffic-light configs ship with each App Store installer via
+the shared `BaseOS/app-store/lib/tontoo-app-theme.sh` helpers
+(Firefox `userChrome.css` per profile, VSCode `settings.json` merge);
+Chromium needs nothing (GTK colors plus portal are automatic).
 
 ### Known limitations
 

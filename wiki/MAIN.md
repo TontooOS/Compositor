@@ -71,6 +71,11 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-11: App Store theme helpers — shared
+  `BaseOS/app-store/lib/tontoo-app-theme.sh` (Firefox traffic lights
+  per profile incl. Flatpak, VSCode settings merge, bilingual
+  messages) plus example installers for Firefox, VSCode and Chromium.
+  See [WindowControls.md](WindowControls.md).
 - 2026-09-11: Settings socket plus wallpaper crossfade — new
   `settings_ipc` (`COMPOSITOR_SOCKET` or `/run/tontoo-compositor.sock`,
   extensible op table: `ping`, `set_wallpaper`, display/theme later).
