@@ -636,6 +636,7 @@ pub fn try_render_all(state: &mut TontooCompositor) {
     let tontoo_ui = &state.tontoo_ui;
     let window_controls = &mut state.shell.window_controls;
     let color_scheme = state.color_scheme;
+    let wallpaper_fill = state.wallpaper_fill.clone();
 
     let Some(udev) = state.udev_data.as_mut() else {
         return;
@@ -659,6 +660,7 @@ pub fn try_render_all(state: &mut TontooCompositor) {
                 wallpaper_fade,
                 wallpaper_fade_buffer,
                 fade_alpha,
+                &wallpaper_fill,
                 render_cache,
                 tontoo_ui,
                 state.focused_surface.as_ref(),
@@ -700,33 +702,31 @@ fn create_wallpaper_buffer(
     }
 }
 
-/// Create a lightweight wallpaper render element from a cached GPU buffer.
-fn wallpaper_buffer_to_element(
+/// Wallpaper render elements from a cached GPU buffer, one quad per
+/// layout cell (tiling repeats the texture).
+fn wallpaper_elements(
     buffer: &TextureBuffer<GlesTexture>,
     wallpaper: &Wallpaper,
     output_size: Size<i32, Physical>,
+    fill: &str,
     alpha: Option<f32>,
-) -> TextureRenderElement<GlesTexture> {
+) -> Vec<TextureRenderElement<GlesTexture>> {
     let (wp_w, wp_h) = wallpaper.size();
-    let scale_x = output_size.w as f64 / wp_w as f64;
-    let scale_y = output_size.h as f64 / wp_h as f64;
-    let fill_scale = scale_x.max(scale_y);
-
-    let scaled_w = (wp_w as f64 * fill_scale) as i32;
-    let scaled_h = (wp_h as f64 * fill_scale) as i32;
-    let offset_x = ((output_size.w - scaled_w) / 2) as f64;
-    let offset_y = ((output_size.h - scaled_h) / 2) as f64;
-
     let src = Rectangle::from_size(Size::from((wp_w as f64, wp_h as f64)));
 
-    TextureRenderElement::from_texture_buffer(
-        Point::from((offset_x, offset_y)),
-        buffer,
-        alpha,
-        Some(src),
-        Some(Size::from((scaled_w, scaled_h))),
-        Kind::Unspecified,
-    )
+    crate::wallpaper::wallpaper_layout(wp_w, wp_h, output_size.w, output_size.h, fill)
+        .into_iter()
+        .map(|quad| {
+            TextureRenderElement::from_texture_buffer(
+                Point::from(quad.offset),
+                buffer,
+                alpha,
+                Some(src),
+                Some(Size::from(quad.size)),
+                Kind::Unspecified,
+            )
+        })
+        .collect()
 }
 
 /// Signed distance to rounded rectangle (negative = inside, positive = outside).
@@ -906,6 +906,7 @@ fn render_surface(
     wallpaper_fade: Option<&crate::wallpaper::WallpaperFade>,
     wallpaper_fade_buffer: &mut Option<TextureBuffer<GlesTexture>>,
     fade_alpha: Option<f32>,
+    wallpaper_fill: &str,
     render_cache: &mut crate::render_cache::RenderCache,
     tontoo_ui: &crate::handlers::tontoo_ui::TontooUiState,
     focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
@@ -1145,14 +1146,15 @@ fn render_surface(
         }
     }
 
-    // 2. Wallpaper (bottommost, pushed last)
+    // 2. Wallpaper (bottommost, pushed last), then the crossfade overlay.
     if let Some(wp) = wallpaper {
         if wallpaper_buffer.is_none() {
             *wallpaper_buffer = create_wallpaper_buffer(renderer, wp);
         }
         if let Some(ref buf) = wallpaper_buffer {
-            let wp_element = wallpaper_buffer_to_element(buf, wp, output_size, None);
-            all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(wp_element)));
+            for element in wallpaper_elements(buf, wp, output_size, wallpaper_fill, None) {
+                all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(element)));
+            }
         }
     }
     // 2b. Crossfade overlay: incoming wallpaper directly above the old one.
@@ -1161,9 +1163,9 @@ fn render_surface(
             *wallpaper_fade_buffer = create_wallpaper_buffer(renderer, &fade.next);
         }
         if let Some(ref buf) = wallpaper_fade_buffer {
-            let fx_element =
-                wallpaper_buffer_to_element(buf, &fade.next, output_size, Some(alpha));
-            all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(fx_element)));
+            for element in wallpaper_elements(buf, &fade.next, output_size, wallpaper_fill, Some(alpha)) {
+                all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(element)));
+            }
         }
     }
 

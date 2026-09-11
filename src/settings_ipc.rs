@@ -6,8 +6,8 @@
 //! one JSON object per line, replies are `{"ok":true,"result":...}` or
 //! `{"ok":false,"error":"..."}` (same shape as the windows IPC).
 //!
-//! Ops: `ping`, `set_wallpaper` (`{"path": "..."}` starts a macOS-like
-//! crossfade to the image file).
+//! Ops: `ping`, `set_wallpaper` (`{"path": "...", "fill"?}` starts a
+//! macOS-like crossfade and switches the fill mode).
 //!
 //! Like the windows IPC, the listener is a calloop [`Generic`] source, so
 //! requests run inside the compositor event loop with direct `&mut` access
@@ -138,8 +138,13 @@ fn dispatch(state: &mut TontooCompositor, request: &serde_json::Value) -> Result
         "ping" => Ok(serde_json::json!({"pong": true})),
         "set_wallpaper" => {
             let path = parse_set_wallpaper_path(request)?;
-            state.set_wallpaper(&path)?;
-            Ok(serde_json::json!({"path": path.to_string_lossy(), "fading": true}))
+            let fill = request.get("fill").and_then(|v| v.as_str());
+            state.set_wallpaper(&path, fill)?;
+            Ok(serde_json::json!({
+                "path": path.to_string_lossy(),
+                "fill": state.wallpaper_fill,
+                "fading": true,
+            }))
         }
         other => Err(format!("unknown op: {other}")),
     }

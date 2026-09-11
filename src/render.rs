@@ -125,36 +125,40 @@ pub fn init_winit(
                         let wallpaper_buffer = &mut state.wallpaper_buffer;
                         let wallpaper_fade = state.wallpaper_fade.as_ref();
                         let wallpaper_fade_buffer = &mut state.wallpaper_fade_buffer;
-                        let wallpaper_element: Option<TextureRenderElement<GlesTexture>> =
-                            wallpaper.and_then(|wp| {
-                                let output_size = Size::from((size.w as i32, size.h as i32));
-                                if wallpaper_buffer.is_none() {
-                                    *wallpaper_buffer = create_winit_wallpaper_buffer(renderer, wp);
-                                }
-                                wallpaper_buffer
-                                    .as_ref()
-                                    .map(|buf| winit_wallpaper_from_buffer(buf, wp, output_size, None))
-                            });
+                        let wallpaper_fill = state.wallpaper_fill.clone();
+                        let output_size = Size::from((size.w as i32, size.h as i32));
+                        let mut wallpaper_elements: Vec<TextureRenderElement<GlesTexture>> =
+                            Vec::new();
+                        if let Some(wp) = wallpaper {
+                            if wallpaper_buffer.is_none() {
+                                *wallpaper_buffer = create_winit_wallpaper_buffer(renderer, wp);
+                            }
+                            if let Some(buf) = wallpaper_buffer.as_ref() {
+                                wallpaper_elements.extend(winit_wallpaper_elements(
+                                    buf,
+                                    wp,
+                                    output_size,
+                                    &wallpaper_fill,
+                                    None,
+                                ));
+                            }
+                        }
                         // Crossfade overlay: incoming wallpaper on top with eased alpha.
-                        let wallpaper_fade_element: Option<TextureRenderElement<GlesTexture>> =
-                            match (wallpaper_fade, fade_alpha) {
-                                (Some(fade), Some(alpha)) => {
-                                    let output_size = Size::from((size.w as i32, size.h as i32));
-                                    if wallpaper_fade_buffer.is_none() {
-                                        *wallpaper_fade_buffer =
-                                            create_winit_wallpaper_buffer(renderer, &fade.next);
-                                    }
-                                    wallpaper_fade_buffer.as_ref().map(|buf| {
-                                        winit_wallpaper_from_buffer(
-                                            buf,
-                                            &fade.next,
-                                            output_size,
-                                            Some(alpha),
-                                        )
-                                    })
-                                }
-                                _ => None,
-                            };
+                        if let (Some(fade), Some(alpha)) = (wallpaper_fade, fade_alpha) {
+                            if wallpaper_fade_buffer.is_none() {
+                                *wallpaper_fade_buffer =
+                                    create_winit_wallpaper_buffer(renderer, &fade.next);
+                            }
+                            if let Some(buf) = wallpaper_fade_buffer.as_ref() {
+                                wallpaper_elements.extend(winit_wallpaper_elements(
+                                    buf,
+                                    &fade.next,
+                                    output_size,
+                                    &wallpaper_fill,
+                                    Some(alpha),
+                                ));
+                            }
+                        }
 
                         let pointer_pos = state.seat.get_pointer().map(|p| p.current_location());
 
@@ -176,13 +180,9 @@ pub fn init_winit(
                         // Menubar.app system app and the bottom dock is the external Dock.app
                         // system app (both start via LaunchPad as layer-shell surfaces).
 
-                        // Wallpaper (bottommost)
-                        if let Some(wp) = wallpaper_element {
+                        // Wallpaper (bottommost, then the crossfade overlay).
+                        for wp in wallpaper_elements {
                             all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(wp)));
-                        }
-                        // Crossfade overlay directly above the old wallpaper.
-                        if let Some(fx) = wallpaper_fade_element {
-                            all_elements.push(TontooRenderElements::Wallpaper(WallpaperElement(fx)));
                         }
 
                         // Layer-shell surfaces below windows (Background/Bottom layers).
@@ -444,30 +444,27 @@ fn create_winit_wallpaper_buffer(
     .ok()
 }
 
-fn winit_wallpaper_from_buffer(
+fn winit_wallpaper_elements(
     buffer: &TextureBuffer<GlesTexture>,
     wallpaper: &Wallpaper,
     output_size: Size<i32, Physical>,
+    fill: &str,
     alpha: Option<f32>,
-) -> TextureRenderElement<GlesTexture> {
+) -> Vec<TextureRenderElement<GlesTexture>> {
     let (wp_w, wp_h) = wallpaper.size();
-    let scale_x = output_size.w as f64 / wp_w as f64;
-    let scale_y = output_size.h as f64 / wp_h as f64;
-    let fill_scale = scale_x.max(scale_y);
-
-    let scaled_w = (wp_w as f64 * fill_scale) as i32;
-    let scaled_h = (wp_h as f64 * fill_scale) as i32;
-    let offset_x = ((output_size.w - scaled_w) / 2) as f64;
-    let offset_y = ((output_size.h - scaled_h) / 2) as f64;
-
-    TextureRenderElement::from_texture_buffer(
-        Point::from((offset_x, offset_y)),
-        buffer,
-        alpha,
-        None,
-        Some(Size::from((scaled_w, scaled_h))),
-        Kind::Unspecified,
-    )
+    crate::wallpaper::wallpaper_layout(wp_w, wp_h, output_size.w, output_size.h, fill)
+        .into_iter()
+        .map(|quad| {
+            TextureRenderElement::from_texture_buffer(
+                Point::from(quad.offset),
+                buffer,
+                alpha,
+                None,
+                Some(Size::from(quad.size)),
+                Kind::Unspecified,
+            )
+        })
+        .collect()
 }
 
 // ── Rounded-rect helper (shared by window shadows / borders) ──

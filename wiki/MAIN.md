@@ -71,6 +71,11 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-11: Wallpaper fill modes — the render pipeline honors
+  `fill`, `fit`, `stretch`, `center` and `tile` (destination quads from
+  `wallpaper_layout` on both backends); `set_wallpaper` takes an
+  optional `fill` that switches the mode immediately. See
+  [Wallpaper.md](Wallpaper.md) and [SettingsIpc.md](SettingsIpc.md).
 - 2026-09-11: App Store theme helpers — shared
   `BaseOS/app-store/lib/tontoo-app-theme.sh` (Firefox traffic lights
   per profile incl. Flatpak, VSCode settings merge, bilingual

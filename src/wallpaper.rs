@@ -41,6 +41,75 @@ pub fn parse_set_wallpaper_path(request: &serde_json::Value) -> Result<PathBuf, 
         .ok_or_else(|| "missing path".to_string())
 }
 
+/// Fill modes honored by the render pipeline.
+pub const FILL_MODES: &[&str] = &["fill", "fit", "stretch", "center", "tile"];
+/// Fill mode used at boot and for unknown values.
+pub const DEFAULT_FILL: &str = "fill";
+
+/// True for the five known fill modes.
+pub fn valid_fill(fill: &str) -> bool {
+    FILL_MODES.contains(&fill)
+}
+
+/// One wallpaper quad: destination offset/size in output pixels.
+/// The texture source is always the full image (tiles repeat it).
+pub struct WallpaperQuad {
+    pub offset: (f64, f64),
+    pub size: (i32, i32),
+}
+
+/// Destination quads for a wallpaper on an output. Unknown or degenerate
+/// inputs fall back to a single `fill` quad (or none for empty sizes).
+pub fn wallpaper_layout(wp_w: i32, wp_h: i32, out_w: i32, out_h: i32, fill: &str) -> Vec<WallpaperQuad> {
+    if wp_w <= 0 || wp_h <= 0 || out_w <= 0 || out_h <= 0 {
+        return Vec::new();
+    }
+    let (ww, wh, ow, oh) = (wp_w as f64, wp_h as f64, out_w as f64, out_h as f64);
+    match fill {
+        "fit" => {
+            let scale = (ow / ww).min(oh / wh);
+            let dw = (ww * scale).round() as i32;
+            let dh = (wh * scale).round() as i32;
+            vec![WallpaperQuad {
+                offset: ((ow - dw as f64) / 2.0, (oh - dh as f64) / 2.0),
+                size: (dw, dh),
+            }]
+        }
+        "stretch" => vec![WallpaperQuad {
+            offset: (0.0, 0.0),
+            size: (out_w, out_h),
+        }],
+        "center" => vec![WallpaperQuad {
+            offset: ((ow - ww) / 2.0, (oh - wh) / 2.0),
+            size: (wp_w, wp_h),
+        }],
+        "tile" => {
+            let nx = (ow / ww).ceil().max(1.0) as i32;
+            let ny = (oh / wh).ceil().max(1.0) as i32;
+            let mut quads = Vec::with_capacity((nx * ny) as usize);
+            for y in 0..ny {
+                for x in 0..nx {
+                    quads.push(WallpaperQuad {
+                        offset: (x as f64 * ww, y as f64 * wh),
+                        size: (wp_w, wp_h),
+                    });
+                }
+            }
+            quads
+        }
+        _ => {
+            // "fill" and anything unknown: cover the output, center overflow.
+            let scale = (ow / ww).max(oh / wh);
+            let dw = (ww * scale).round() as i32;
+            let dh = (wh * scale).round() as i32;
+            vec![WallpaperQuad {
+                offset: ((ow - dw as f64) / 2.0, (oh - dh as f64) / 2.0),
+                size: (dw, dh),
+            }]
+        }
+    }
+}
+
 /// Maximum texture dimension for the wallpaper. virtio-gpu/virgl and GLES2
 /// implementations reject or silently misrender very large single textures
 /// (a 6016x3384 RGBA wallpaper is ~81 MB), which previously produced a black
@@ -125,5 +194,51 @@ mod tests {
         assert!(parse_set_wallpaper_path(&serde_json::json!({"op": "set_wallpaper"})).is_err());
         assert!(parse_set_wallpaper_path(&serde_json::json!({"path": ""})).is_err());
         assert!(parse_set_wallpaper_path(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn fill_modes_validate() {
+        assert_eq!(FILL_MODES, &["fill", "fit", "stretch", "center", "tile"]);
+        assert!(valid_fill("tile"));
+        assert!(!valid_fill("melt"));
+        assert!(!valid_fill(""));
+    }
+
+    #[test]
+    fn layout_covers_and_fits() {
+        // 16:9 image on a 16:9 output: cover and fit agree.
+        let cover = wallpaper_layout(1920, 1080, 1920, 1080, "fill");
+        assert_eq!(cover.len(), 1);
+        assert_eq!(cover[0].size, (1920, 1080));
+        assert_eq!(cover[0].offset, (0.0, 0.0));
+        // Portrait image covered on landscape output: overflow centered.
+        let cover = wallpaper_layout(1080, 1920, 1920, 1080, "fill");
+        assert_eq!(cover.len(), 1);
+        assert!(cover[0].size.0 >= 1920 && cover[0].size.1 >= 1080);
+        // Fit letterboxes instead.
+        let fit = wallpaper_layout(1080, 1920, 1920, 1080, "fit");
+        assert_eq!(fit.len(), 1);
+        assert!(fit[0].size.0 <= 1920 && fit[0].size.1 <= 1080);
+        assert_eq!(fit[0].offset.1, 0.0);
+    }
+
+    #[test]
+    fn layout_stretch_center_tile() {
+        let stretch = wallpaper_layout(800, 600, 1920, 1080, "stretch");
+        assert_eq!(stretch.len(), 1);
+        assert_eq!(stretch[0].size, (1920, 1080));
+        assert_eq!(stretch[0].offset, (0.0, 0.0));
+        let center = wallpaper_layout(800, 600, 1920, 1080, "center");
+        assert_eq!(center.len(), 1);
+        assert_eq!(center[0].size, (800, 600));
+        assert_eq!(center[0].offset, (560.0, 240.0));
+        let tiles = wallpaper_layout(800, 600, 1920, 1080, "tile");
+        assert_eq!(tiles.len(), 3 * 2);
+        assert_eq!(tiles[0].offset, (0.0, 0.0));
+        assert_eq!(tiles[5].offset, (1600.0, 600.0));
+        // Unknown modes and degenerate inputs stay safe.
+        assert_eq!(wallpaper_layout(800, 600, 1920, 1080, "melt").len(), 1);
+        assert!(wallpaper_layout(0, 600, 1920, 1080, "fill").is_empty());
+        assert!(wallpaper_layout(800, 600, 0, 1080, "fill").is_empty());
     }
 }

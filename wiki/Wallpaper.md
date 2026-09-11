@@ -74,8 +74,18 @@ Set remotely via [SettingsIpc.md](SettingsIpc.md) (`set_wallpaper`).
 ## Usage
 
 The render pipeline uploads the wallpaper to a GPU `TextureBuffer` once, then
-reuses it on every frame. The wallpaper is scaled to fill the output using a
-"cover" strategy (scale up to fill, center the overflow).
+reuses it on every frame. Destination quads come from `wallpaper_layout`
+(fill mode of `TontooCompositor::wallpaper_fill`):
+
+| Mode | Layout |
+|---|---|
+| `fill` | Cover the output, center the overflow (default) |
+| `fit` | Fit inside the output, center (clear color shows) |
+| `stretch` | Stretch to the output size |
+| `center` | Original size, centered |
+| `tile` | Repeat 1:1 across the output |
+
+Unknown modes fall back to `fill`; degenerate sizes render nothing.
 
 ## Cross References
 

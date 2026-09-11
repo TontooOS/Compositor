@@ -13,7 +13,7 @@ IPC: `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}`).
 | Op | Params | Result |
 |---|---|---|
 | `ping` | — | `{"pong": true}` |
-| `set_wallpaper` | `{"path": "/abs/image.png"}` | `{"path": "...", "fading": true}` |
+| `set_wallpaper` | `{"path": "/abs/image.png", "fill"?}` | `{"path": "...", "fill": "...", "fading": true}` |
 
 Rules:
 
@@ -24,6 +24,10 @@ Rules:
   client can never freeze the compositor.
 - A bind failure is not fatal: without IPC the desktop still runs.
 - Unknown ops return `ok: false`; new ops extend `dispatch` only.
+- `fill` is optional (`fill`, `fit`, `stretch`, `center`, `tile`;
+  see [Wallpaper.md](Wallpaper.md)): a valid mode switches the render
+  mode immediately, omitting it keeps the current mode, unknown modes
+  are rejected without touching anything.
 
 ## API
 

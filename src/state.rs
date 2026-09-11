@@ -78,6 +78,9 @@ pub struct TontooCompositor {
     pub wallpaper: Option<Wallpaper>,
     pub wallpaper_path: PathBuf,
     pub wallpaper_buffer: Option<TextureBuffer<GlesTexture>>,
+    /// Fill mode currently rendered (`fill`, `fit`, `stretch`, `center`,
+    /// `tile`; defaults to `fill`).
+    pub wallpaper_fill: String,
 
     /// Running crossfade to a new wallpaper (macOS-like fade). The old
     /// wallpaper renders underneath at full alpha, `next` on top with the
@@ -241,6 +244,7 @@ impl TontooCompositor {
             wallpaper,
             wallpaper_path,
             wallpaper_buffer: None,
+            wallpaper_fill: crate::wallpaper::DEFAULT_FILL.to_string(),
             wallpaper_fade: None,
             wallpaper_fade_buffer: None,
             texture_cache: TextureCache::new(),
@@ -391,9 +395,20 @@ impl TontooCompositor {
     /// Start a crossfade to a new wallpaper file. The image loads (and
     /// downscales) synchronously; failures leave the current wallpaper
     /// untouched. Frames keep coming until the fade finishes.
-    pub fn set_wallpaper(&mut self, path: &Path) -> Result<(), String> {
+    /// `fill` (`fill`, `fit`, `stretch`, `center`, `tile`) switches the
+    /// render mode immediately; `None` keeps the current mode. Unknown
+    /// modes are rejected without touching anything.
+    pub fn set_wallpaper(&mut self, path: &Path, fill: Option<&str>) -> Result<(), String> {
+        if let Some(mode) = fill {
+            if !crate::wallpaper::valid_fill(mode) {
+                return Err(format!("unknown fill mode {mode:?}"));
+            }
+        }
         let next = Wallpaper::load(path)
             .map_err(|e| format!("cannot load wallpaper {}: {e}", path.display()))?;
+        if let Some(mode) = fill {
+            self.wallpaper_fill = mode.to_string();
+        }
         self.wallpaper_fade = Some(WallpaperFade {
             next,
             path: path.to_path_buf(),
