@@ -1,0 +1,211 @@
+# TontooOS Wayfire Configuration
+# Wayfire 0.12+ (based on wlroots 0.20)
+# Derived from upstream wayfire.ini, themed for TontooOS Tahoe/Sequoia style.
+#
+# Install: cp wayfire.ini.tontoo ~/.config/wayfire.ini
+# ISO default: /etc/skel/.config/wayfire.ini (via BaseOS/customize_airootfs.sh)
+#
+# Fonts: SF Pro (installed to /usr/share/fonts/OTF/SF-Pro-Display-Regular.otf etc.)
+# Colors: Dark #1d1d1d / Light #ececec (AGENTS.md)
+
+[core]
+# TontooOS plugin set - lean, macOS-like, CSD-first (apps draw own header)
+# blur enabled for LiquidGlass, decoration only for XWayland fallback,
+# wayfire-shell handles super-key toggle, foreign-toplevel for Dock/Menubar IPC
+plugins = \
+  alpha \
+  animate \
+  autostart \
+  command \
+  decoration \
+  foreign-toplevel \
+  grid \
+  idle \
+  move \
+  place \
+  resize \
+  switcher \
+  vswitch \
+  wayfire-shell \
+  window-rules \
+  wm-actions \
+  blur \
+  expo \
+  cube \
+  wobbly \
+  zoom
+
+close_top_view = <super> KEY_Q | <alt> KEY_F4
+vwidth = 3
+vheight = 1
+preferred_decoration_mode = client
+
+# TontooOS: minimal window animations (macOS spring feel comes from apps + wobbly tuning)
+[animate]
+enabled_for = none
+duration = 200
+startup_duration = 200
+fade_duration = 150
+
+[wobbly]
+grid_resolution = 8
+spring_k = 8.0
+friction = 3.0
+
+# macOS-like window management
+[move]
+activate = <super> BTN_LEFT
+
+[resize]
+activate = <super> BTN_RIGHT
+
+[zoom]
+modifier = <super>
+
+[alpha]
+modifier = <super> <alt>
+
+[grid]
+slot_l  = <super> KEY_LEFT  | <super> KEY_KP4
+slot_r  = <super> KEY_RIGHT | <super> KEY_KP6
+slot_t  = <super> KEY_UP    | <super> KEY_KP8
+slot_b  = <super> KEY_DOWN  | <super> KEY_KP2
+slot_c  = <super> KEY_KP5
+slot_tl = <super> KEY_KP7
+slot_tr = <super> KEY_KP9
+slot_bl = <super> KEY_KP1
+slot_br = <super> KEY_KP3
+restore = <super> KEY_KP0
+
+[switcher]
+next_view = <alt> KEY_TAB
+prev_view = <alt> <shift> KEY_TAB
+
+[vswitch]
+binding_left  = <ctrl> <super> KEY_LEFT
+binding_right = <ctrl> <super> KEY_RIGHT
+with_win_left  = <ctrl> <super> <shift> KEY_LEFT
+with_win_right = <ctrl> <super> <shift> KEY_RIGHT
+
+[expo]
+toggle = <super> KEY_E
+
+[cube]
+activate = <ctrl> <alt> BTN_LEFT
+
+# Decoration - CSD-first, only XWayland fallback
+# SF Pro font, TontooOS dark #1d1d1d (AGENTS.md) with transparency
+[decoration]
+font = SF Pro Display
+font_color = #ffffffff
+title_height = 28
+border_size = 0
+button_order = close minimize maximize
+active_color = #1d1d1ddd
+inactive_color = #ecececcc
+# Never force decoration - apps do CSD via theme (tontoo-theme-apply)
+ignore_views = none
+forced_views = none
+
+# Blur - LiquidGlass frosted effect, disabled by default for performance
+# Enable via tontoo-theme-apply or Settings -> Appearance
+[blur]
+blur_background = false
+blur_method = kawase
+bokeh_median = false
+
+# Autostart - TontooOS services (replaces wf-shell)
+[autostart]
+# Wayland env for GTK apps
+0_env = dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY XAUTHORITY WAYLAND_DISPLAY
+# Disable Wayfire's default shell (we use Menubar.app + Dock.app)
+autostart_wf_shell = false
+
+# TontooOS shell - wait for Wayland socket (start-*.sh handle it)
+menubar = /usr/local/bin/start-menubar.sh
+dock    = /usr/local/bin/start-dock.sh
+settings_daemon = /usr/local/bin/start-settingsdaemon.sh
+
+# Wallpaper - TontooOS dynamic wallpapers (tahoe default)
+# Uses swaybg or wf-background fallback; TontooOS wallpaper is also set via
+# Settings daemon IPC, so this is just boot fallback
+wallpaper = swaybg -i /usr/share/wallpapers/tontoo/Tahoe-Light-6K.png -m fill || swaybg -i /usr/share/wallpapers/tontoo/Golden-Gate.png -m fill || true
+# Alternative: wcm handles wallpaper, leave empty if using Settings daemon
+
+# TontooOS theme apply - sets GTK/Qt dconf to TontooOS-Dark/Light before apps start
+theme = /usr/local/bin/tontoo-theme-apply 2>/dev/null || true
+
+# Compositor IPC - keep sockets compatible with old tontoo-compositor where possible
+# (LaunchPad expects tontoo-compositor socket; Wayfire uses wayland-0)
+# No extra config needed - Wayfire exposes wayland-0 in XDG_RUNTIME_DIR
+
+# Idle / lock
+idle = swayidle before-sleep swaylock 2>/dev/null || true
+portal = /usr/lib/xdg-desktop-portal 2>/dev/null || /usr/libexec/xdg-desktop-portal 2>/dev/null || true
+outputs = kanshi 2>/dev/null || true
+notifications = mako 2>/dev/null || true
+gamma = wlsunset 2>/dev/null || true
+
+# Commands - keep TontooOS defaults
+[command]
+binding_terminal = <super> KEY_ENTER
+command_terminal = foot || alacritty || xterm
+binding_launcher = <super> KEY_SPACE
+command_launcher = wofi --show drun || wofi
+binding_lock = <super> <shift> KEY_ESC
+command_lock = swaylock 2>/dev/null || loginctl lock-session || true
+binding_logout = <super> KEY_ESC
+command_logout = wlogout 2>/dev/null || true
+binding_screenshot = KEY_PRINT
+command_screenshot = grim $(xdg-user-dir PICTURES 2>/dev/null || echo ~)/Screenshots/$(date '+%F_%T').png 2>/dev/null || grim /tmp/$(date '+%F_%T').png
+binding_screenshot_interactive = <shift> KEY_PRINT
+command_screenshot_interactive = slurp 2>/dev/null | grim -g - $(xdg-user-dir PICTURES 2>/dev/null || echo ~)/Screenshots/$(date '+%F_%T').png
+repeatable_binding_volume_up = KEY_VOLUMEUP
+command_volume_up = pactl set-sink-volume @DEFAULT_SINK@ +5% 2>/dev/null || amixer set Master 5%+ 2>/dev/null || true
+repeatable_binding_volume_down = KEY_VOLUMEDOWN
+command_volume_down = pactl set-sink-volume @DEFAULT_SINK@ -5% 2>/dev/null || amixer set Master 5%- 2>/dev/null || true
+binding_mute = KEY_MUTE
+command_mute = pactl set-sink-mute @DEFAULT_SINK@ toggle 2>/dev/null || amixer set Master toggle 2>/dev/null || true
+repeatable_binding_light_up = KEY_BRIGHTNESSUP
+command_light_up = light -A 5 2>/dev/null || brightnessctl set +5% 2>/dev/null || true
+repeatable_binding_light_down = KEY_BRIGHTNESSDOWN
+command_light_down = light -U 5 2>/dev/null || brightnessctl set 5%- 2>/dev/null || true
+
+# Wayfire shell - Super key opens launcher (like Spotlight)
+[wayfire-shell]
+toggle_menu = <super>
+
+# Workarounds - NVIDIA explicit sync + HiDPI (Wayfire 0.11+)
+[workarounds]
+# Enable on NVIDIA: WLR_RENDERER=vulkan wayfire or force_frame_sync = true
+# Uncomment if you see flickering on NVIDIA 555+ :
+# force_frame_sync = true
+# XWayland apps get native HiDPI buffer scale
+all_dialogs_modal = false
+
+# Input - keep system defaults, SF Pro handled by GTK not compositor text
+[input]
+# xkb_layout = us
+# xkb_options = grp:alt_shift_toggle
+# Example: xkb_layout = us,de
+# xkb_variant = ,qwertz
+
+# Output - HDR / fractional scaling handled by wlr-randr/kanshi
+# Fractional scaling crisp text via Wayfire 0.11+ floating geometry (auto)
+# Example:
+# [output:eDP-1]
+# mode = 2880x1800@60
+# scale = 2.0
+# transform = normal
+
+# Window rules - keep TontooOS apps on correct layers
+[window-rules]
+# Menubar and Dock are layer-shell, not normal windows - no rule needed
+# Example: keep Settings always floating
+# settings_float = on created if app_id is "com.tontoo.systemsettings" then set floating
+
+# Idle config example
+# [idle]
+# toggle = <super> KEY_Z
+# screensaver_timeout = 300
+# dpms_timeout = 600

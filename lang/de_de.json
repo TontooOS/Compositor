@@ -1,8 +1,9 @@
 {
   "compositor": {
-    "name": "TontooOS Compositor",
-    "version": "0.1.0",
-    "welcome": "TontooOS Compositor gestartet",
+    "name": "TontooOS Compositor (Wayfire)",
+    "version": "0.12.0",
+    "base": "Wayfire 0.12 / wlroots 0.20",
+    "welcome": "TontooOS Compositor gestartet (Wayfire)",
     "terminal_launched": "Terminal gestartet",
     "terminal_not_found": "Kein Terminal gefunden",
     "seat_name": "seat0"
