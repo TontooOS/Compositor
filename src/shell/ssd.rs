@@ -557,14 +557,26 @@ pub fn restore_minimized(
     let loc = center_on_output(state, size);
     state.space.map_element(window.clone(), loc, true);
     state.space.raise_element(window, true);
+    // The restored window takes selection: deactivate the rest so only
+    // one CSD client renders the active (colored traffic light) header.
     state.space.elements().for_each(|w| {
         w.set_activated(false);
     });
     window.set_activated(true);
+    state.space.elements().for_each(|w| {
+        if let Some(toplevel) = w.toplevel() {
+            toplevel.send_pending_configure();
+        }
+    });
     if let Some(toplevel) = window.toplevel() {
         let surface = toplevel.wl_surface().clone();
+        // Keyboard focus follows selection so CSD clients leave the
+        // `:backdrop` (gray traffic light) state.
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        if let Some(keyboard) = state.seat.get_keyboard() {
+            keyboard.set_focus(state, Some(surface.clone()), serial);
+        }
         state.focused_surface = Some(surface);
-        toplevel.send_pending_configure();
     }
     true
 }

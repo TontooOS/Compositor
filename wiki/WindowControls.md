@@ -52,6 +52,7 @@ backends.
 | Close | `send_close` to the client |
 | Maximize | Toggles the maximized state; restores the previous geometry on toggle-off |
 | Minimize | Unmaps the window and tracks it as minimized (macOS behavior); the external `Dock.app` restores it via the `restore_window` IPC op |
+| Restore (minimized) | Re-maps the window centered, raises it, deactivates all other windows, activates it, broadcasts the activated configure and moves keyboard focus to it, so the CSD client leaves the `:backdrop` (gray traffic light) state |
 | Bar background drag | Starts a `MoveSurfaceGrab` |
 
 Default app configuration ships system-following defaults out of the

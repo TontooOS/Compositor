@@ -234,6 +234,19 @@ impl TontooCompositor {
                             let window_surface =
                                 window.toplevel().unwrap().wl_surface().clone();
                             self.space.raise_element(&window, true);
+                            // SSD windows render their bar from keyboard
+                            // focus, but CSD content (and foreign clients)
+                            // still key off xdg activated: keep both in
+                            // sync on every bar click.
+                            self.space.elements().for_each(|w| {
+                                w.set_activated(false);
+                            });
+                            window.set_activated(true);
+                            self.space.elements().for_each(|w| {
+                                if let Some(toplevel) = w.toplevel() {
+                                    toplevel.send_pending_configure();
+                                }
+                            });
                             keyboard.set_focus(self, Some(window_surface.clone()), serial);
                             self.focused_surface = Some(window_surface.clone());
                             let app_name = window_app_name(&window)
@@ -323,6 +336,23 @@ impl TontooCompositor {
             };
                             let is_same_window = self.focused_surface.as_ref() == Some(&window_surface);
 
+                            // Activation is enforced on every click, not
+                            // only on window change: a window mapped
+                            // without an activated configure (or after a
+                            // focus loss without click) must re-activate
+                            // even when it already has keyboard focus.
+                            // `send_pending_configure` no-ops without
+                            // pending changes, so this is cheap.
+                            self.space.elements().for_each(|w| {
+                                w.set_activated(false);
+                            });
+                            window.set_activated(true);
+                            self.space.elements().for_each(|w| {
+                                if let Some(toplevel) = w.toplevel() {
+                                    toplevel.send_pending_configure();
+                                }
+                            });
+
                             if !is_same_window {
                                 // First click on a new window: focus + raise it,
                                 // then fall through so the click also reaches
@@ -331,23 +361,11 @@ impl TontooCompositor {
                                     window_app_name(&window).unwrap_or_default());
 
                                 self.space.raise_element(&window, true);
-                                // Activate the clicked window and deactivate
-                                // the rest, so CSD clients render the active
-                                // state (colored traffic lights).
-                                self.space.elements().for_each(|w| {
-                                    w.set_activated(false);
-                                });
-                                window.set_activated(true);
                                 keyboard.set_focus(
                                     self,
                                     Some(window_surface.clone()),
                                     serial,
                                 );
-                                self.space.elements().for_each(|w| {
-                                    if let Some(toplevel) = w.toplevel() {
-                                        toplevel.send_pending_configure();
-                                    }
-                                });
 
                                 // Track focused surface
                                 self.focused_surface = Some(window_surface.clone());

@@ -72,6 +72,15 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-15: Fix gray CSD traffic lights — `new_toplevel` now
+  broadcasts the activated configure after mapping (the pre-map
+  configure carries no activated state, so new windows stayed gray);
+  window clicks enforce activation on every press (not only on window
+  change); SSD bar clicks also activate; minimized restore deactivates
+  the rest, activates, broadcasts and moves keyboard focus. See
+  [Input.md](Input.md), [WaylandHandlers.md](WaylandHandlers.md) and
+  [WindowControls.md](WindowControls.md).
+
 - 2026-09-11: Display settings — `get_displays` (outputs with modes,
   brightness, night light) and `set_display` (live brightness/night
   light overlays plus same-resolution refresh modeset on udev) over

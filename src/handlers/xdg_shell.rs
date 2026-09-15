@@ -53,6 +53,16 @@ impl XdgShellHandler for TontooCompositor {
             w.set_activated(false);
         });
         window.set_activated(true);
+        // The initial configure above was sent without the activated
+        // state. Push the activation now or CSD clients keep rendering
+        // the inactive (gray traffic light) header forever.
+        // `send_pending_configure` is a no-op for windows without
+        // pending changes, so broadcasting to all is cheap.
+        self.space.elements().for_each(|w| {
+            if let Some(toplevel) = w.toplevel() {
+                toplevel.send_pending_configure();
+            }
+        });
         if let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone()) {
             let serial = smithay::utils::SERIAL_COUNTER.next_serial();
             self.seat

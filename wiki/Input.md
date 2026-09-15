@@ -49,14 +49,19 @@ On button press, the following elements are checked in order:
 
 2. **SSD titlebar clicks**: traffic-light actions and move drags for
    server-side-decorated windows (opt-in only, see CSD note above).
+   A bar click also raises the window, sets keyboard focus, activates
+   it (`set_activated(true)`, all others deactivated) and broadcasts
+   the activated configure.
 
 3. **Window focus**: a click on a window raises it, sets keyboard
-   focus, activates it (`set_activated(true)`, all others deactivated)
-   and passes the click through to the application in the same press
-   (single-click select + activate, macOS behavior). CSD clients use
-   the activation state for their header: the focused window renders
-   colored traffic lights, the rest gray. On click on empty space,
-   deactivates all windows.
+   focus and passes the click through to the application in the same
+   press (single-click select + activate, macOS behavior). Activation
+   is enforced on every click, not only on window change: all other
+   windows are deactivated, the clicked window is activated and the
+   configure is broadcast (`send_pending_configure` no-ops without
+   pending changes). CSD clients use the activation state for their
+   header: the focused window renders colored traffic lights, the rest
+   gray. On click on empty space, deactivates all windows.
 
 > **Removed:** Window traffic light clicks and titlebar drag are no longer
 > handled here — windows use Client-Side Decorations. Move is via the

@@ -81,6 +81,11 @@ fn new_toplevel(&mut self, surface: ToplevelSurface)
 Configures the new toplevel with a default size of 800x500, sends the
 configure, creates a `Window`, maps it at (30, 40) below the reserved
 top strut for the external `Menubar.app`, and triggers a redraw.
+The new window takes selection: all other windows are deactivated, the
+new window is activated (`set_activated(true)`), an activated configure
+is broadcast to all windows (the pre-map configure carries no activated
+state, so without this CSD clients keep the gray inactive header), and
+keyboard focus moves to the new surface.
 
 ### new_popup
 
