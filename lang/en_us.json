@@ -1,0 +1,19 @@
+{
+  "compositor": {
+    "name": "TontooOS Compositor",
+    "version": "0.1.0",
+    "welcome": "TontooOS Compositor started",
+    "terminal_launched": "Terminal launched",
+    "terminal_not_found": "No terminal found",
+    "seat_name": "seat0"
+  },
+  "theme": {
+    "dark": "Dark",
+    "light": "Light",
+    "scheme_changed": "Color scheme changed to {scheme}",
+    "scheme_saved": "Theme setting saved"
+  },
+  "shortcuts": {
+    "super_enter": "Super+Enter: Launch terminal"
+  }
+}
