@@ -25,10 +25,10 @@ udev = [
 ]
 
 # TontooLibs via SDK – unified path (WSL: symlink /Library/System/sdk -> /mnt/c/Users/arlo1/Documents/TontooLibs/SDK)
-# Example when the compositor needs a framework:
-# sdk = { path = "/Library/System/sdk", features = ["Foundation", "Accessibility"] }
-# then in src/main.rs: sdk::preinclude!(); use Foundation::date_now;
+# Frameworks are enabled per-feature; `sdk::preinclude!()` in src/main.rs
+# creates the PascalCase shims (e.g. `CoreImage::TiImage`).
 [dependencies]
+sdk = { path = "/Library/System/sdk", features = ["CoreImage"] }
 # Pinned to a tested master revision (post-0.7.0, pre-0.8.0). Update the rev
 # deliberately after re-verifying; branch=master would move underneath us.
 smithay = { git = "https://github.com/Smithay/smithay.git", rev = "d4bb0de4c983f64e8498e465f084d7621df22b3d", default-features = false, features = [
@@ -47,7 +47,6 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 dirs = "6"
 serde_json = "1"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 xcursor = "0.3"
 fontdue = "0.9"
 smallvec = "1"

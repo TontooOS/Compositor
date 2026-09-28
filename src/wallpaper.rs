@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use image::GenericImageView;
+use sdk::CoreImage::TiImage;
 
 pub struct Wallpaper {
     pixels: Vec<u8>,
@@ -118,26 +118,27 @@ const MAX_DIM: u32 = 4096;
 
 impl Wallpaper {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let img = image::open(path.as_ref())?;
+        let path_str = path.as_ref().to_str().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "wallpaper path is not valid UTF-8",
+            )
+        })?;
+        let img = TiImage::load(path_str)?;
         let (orig_w, orig_h) = img.dimensions();
-        let max_side = orig_w.max(orig_h);
-        let img = if max_side > MAX_DIM {
-            let scale = MAX_DIM as f32 / max_side as f32;
-            let nw = (orig_w as f32 * scale).round().max(1.0) as u32;
-            let nh = (orig_h as f32 * scale).round().max(1.0) as u32;
+        let img = if orig_w.max(orig_h) > MAX_DIM {
             tracing::info!(
-                "Downscaling wallpaper {}x{} -> {}x{} (GL texture safety)",
+                "Downscaling wallpaper {}x{} -> max edge {} (GL texture safety)",
                 orig_w,
                 orig_h,
-                nw,
-                nh
+                MAX_DIM
             );
-            img.resize(nw, nh, image::imageops::FilterType::Triangle)
+            img.thumbnail(MAX_DIM)?
         } else {
             img
         };
         let (width, height) = img.dimensions();
-        let rgba = img.to_rgba8().into_raw();
+        let rgba = img.into_rgba().into_raw();
         tracing::info!(
             "Loaded wallpaper {:?}: {}x{} ({} bytes)",
             path.as_ref(),

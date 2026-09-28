@@ -18,7 +18,7 @@ use smithay::{
     desktop::{layer_map_for_output, space::space_render_elements},
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
-    utils::{Physical, Point, Rectangle, Size, Transform},
+    utils::{Logical, Physical, Point, Rectangle, Size, Transform},
     wayland::shell::wlr_layer::Layer as WlrLayer,
 };
 
@@ -476,6 +476,13 @@ fn winit_wallpaper_elements(
     alpha: Option<f32>,
 ) -> Vec<TextureRenderElement<GlesTexture>> {
     let (wp_w, wp_h) = wallpaper.size();
+    // The src rect selects the sampled texture region in logical coords.
+    // It must cover the whole texture: deriving it from the (differently
+    // sized) dst quad samples out of bounds and clamps (mini image with
+    // edge-stretched borders). The buffer was uploaded 1:1, so texture
+    // logical size == pixel size.
+    let src: Rectangle<f64, Logical> =
+        Rectangle::from_size(Size::from((wp_w as f64, wp_h as f64)));
     let quads = crate::wallpaper::wallpaper_layout(wp_w, wp_h, output_size.w, output_size.h, fill);
     // TEMP-DEBUG: wallpaper size bug hunt
     for q in &quads {
@@ -496,7 +503,7 @@ fn winit_wallpaper_elements(
                 Point::from(quad.offset),
                 buffer,
                 alpha,
-                None,
+                Some(src),
                 Some(Size::from(quad.size)),
                 Kind::Unspecified,
             )
