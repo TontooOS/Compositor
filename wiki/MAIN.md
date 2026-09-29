@@ -10,7 +10,7 @@ it is the external `Dock.app` system app (see [Dock.md](Dock.md)).
 
 - Repository: https://github.com/TontooOS/Libs
 - License: TCL v26.1
-- Version: 26.1.0
+- Version: 27.0.0
 
 ## Feature Index
 
