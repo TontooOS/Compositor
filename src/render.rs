@@ -83,8 +83,13 @@ pub fn init_winit(
                 }
                 WinitEvent::Input(event) => {
                     state.process_input_event(event);
-                    // If animations are active, request continuous redraws
-                    if state.animation_manager.has_active() {
+                    // The winit backend has no idle pump: drain
+                    // `pending_redraw` here, otherwise cursor moves, new
+                    // windows and client repaints never reach the screen
+                    // until the next resize. Animations request continuous
+                    // redraws below.
+                    if state.pending_redraw || state.animation_manager.has_active() {
+                        state.pending_redraw = false;
                         backend.window().request_redraw();
                     }
                 }

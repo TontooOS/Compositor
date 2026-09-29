@@ -129,6 +129,9 @@ impl TontooCompositor {
                     },
                 );
                 pointer.frame(self);
+                // The cursor moved: the winit backend has no idle pump,
+                // arm a repaint (drained in render.rs `WinitEvent::Input`).
+                self.pending_redraw = true;
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let output = match self.space.outputs().next() {
@@ -158,6 +161,8 @@ impl TontooCompositor {
                     },
                 );
                 pointer.frame(self);
+                // Same as relative motion above: arm a repaint.
+                self.pending_redraw = true;
             }
             InputEvent::PointerButton { event, .. } => {
                 let pointer = self.seat.get_pointer().unwrap();
