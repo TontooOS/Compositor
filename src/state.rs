@@ -142,6 +142,12 @@ pub struct TontooCompositor {
     /// Consumed by the udev render pump so an idle desktop does no DRM commits.
     pub pending_redraw: bool,
 
+    /// Shared winit backend handle (winit builds only). Lets Wayland commit
+    /// paths kick real OS redraws via `request_redraw`; the winit backend
+    /// renders solely on `Redraw` events (see `render::SharedWinitBackend`).
+    #[cfg(feature = "winit")]
+    pub winit_backend: Option<crate::render::SharedWinitBackend>,
+
     /// Time of the last executed render pass, used as real `dt` for animations.
     pub last_render: std::time::Instant,
 
@@ -267,6 +273,8 @@ impl TontooCompositor {
             next_window_id: 1,
             render_cache,
             pending_redraw: false,
+            #[cfg(feature = "winit")]
+            winit_backend: None,
             last_render: start_time,
             #[cfg(feature = "udev")]
             udev_data: None,
@@ -396,6 +404,11 @@ impl TontooCompositor {
 
     pub fn request_redraw(&mut self) {
         self.pending_redraw = true;
+        // Winit renders only on OS Redraw events: kick one right away so
+        // mapped windows and committed buffers appear without waiting for
+        // the next input event.
+        #[cfg(feature = "winit")]
+        crate::render::kick_winit_redraw_if_dirty(self);
     }
 
     /// Start a crossfade to a new wallpaper file. The image loads (and

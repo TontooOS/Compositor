@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use std::{cell::RefCell, rc::Rc};
 
 use smithay::{
     backend::{
@@ -8,7 +9,7 @@ use smithay::{
             element::{
                 surface::render_elements_from_surface_tree,
                 texture::{TextureBuffer, TextureRenderElement},
-                Kind,
+                Element, Kind,
             },
             gles::{GlesRenderer, GlesTexture},
         },
@@ -30,11 +31,40 @@ use crate::cursor::{
 use crate::wallpaper::Wallpaper;
 use crate::TontooCompositor;
 
+/// Winit backend shared between the winit event closure (which renders)
+/// and the compositor state (which observes Wayland commits).
+/// The winit backend only produces frames on OS `Redraw` events, so every
+/// `pending_redraw` must be followed by an explicit
+/// `window().request_redraw()` — otherwise mapped windows and committed
+/// buffers never appear on screen until the next input event.
+pub type SharedWinitBackend = Rc<
+    RefCell<
+        smithay::backend::winit::WinitGraphicsBackend<
+            smithay::backend::renderer::gles::GlesRenderer,
+        >,
+    >,
+>;
+
+/// Request an OS redraw of the winit window when output is dirty.
+/// Best-effort: if the backend is busy rendering (`try_borrow` fails),
+/// the `pending_redraw` flag stays set and the event-loop idle hook
+/// retries after the running frame.
+pub fn kick_winit_redraw_if_dirty(state: &TontooCompositor) {
+    if !state.pending_redraw {
+        return;
+    }
+    if let Some(backend) = &state.winit_backend {
+        if let Ok(backend) = backend.try_borrow() {
+            backend.window().request_redraw();
+        }
+    }
+}
+
 pub fn init_winit(
     event_loop: &mut EventLoop<TontooCompositor>,
     state: &mut TontooCompositor,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (mut backend, winit) = winit::init()?;
+    let (backend, winit) = winit::init()?;
 
     let mode = Mode {
         size: backend.window_size(),
@@ -66,6 +96,11 @@ pub fn init_winit(
 
     let mut last_tick = Instant::now();
 
+    // Share the backend with the compositor state so Wayland commits, new
+    // windows and IPC ops can kick OS redraws (see `SharedWinitBackend`).
+    let backend: SharedWinitBackend = Rc::new(RefCell::new(backend));
+    state.winit_backend = Some(backend.clone());
+
     event_loop
         .handle()
         .insert_source(winit, move |event, _, state| {
@@ -90,7 +125,7 @@ pub fn init_winit(
                     // redraws below.
                     if state.pending_redraw || state.animation_manager.has_active() {
                         state.pending_redraw = false;
-                        backend.window().request_redraw();
+                        backend.borrow().window().request_redraw();
                     }
                 }
                 WinitEvent::Redraw => {
@@ -103,13 +138,14 @@ pub fn init_winit(
                     state.finish_wallpaper_fade_if_done(now);
                     let fade_alpha = state.wallpaper_fade_alpha(now);
 
-                    let size = backend.window_size();
+                    let size = backend.borrow().window_size();
                     let screen_w = size.w as f32;
                     let screen_h = size.h as f32;
                     let damage = Rectangle::from_size(size);
 
                     {
-                        let (renderer, mut framebuffer) = backend.bind().unwrap();
+                        let mut backend_ref = backend.borrow_mut();
+                        let (renderer, mut framebuffer) = backend_ref.bind().unwrap();
 
                         let space_elements = space_render_elements(
                             renderer,
@@ -124,6 +160,29 @@ pub fn init_winit(
                             )))
                         })
                         .unwrap();
+
+                        // TEMP-DEBUG: invisible-window hunt (revert after diagnosis).
+                        tracing::info!(
+                            "TEMP-DEBUG winit frame: space_windows={} space_elems={}",
+                            state.space.elements().count(),
+                            space_elements.len(),
+                        );
+                        for w in state.space.elements() {
+                            tracing::info!(
+                                "TEMP-DEBUG window: loc={:?} geo={:?}",
+                                state.space.element_location(w),
+                                state.space.element_geometry(w),
+                            );
+                        }
+                        for (i, elem) in space_elements.iter().enumerate() {
+                            tracing::info!(
+                                "TEMP-DEBUG space_elem[{}]: geo={:?} src={:?} kind={:?}",
+                                i,
+                                elem.geometry(smithay::utils::Scale::from(1.0)),
+                                elem.src(),
+                                elem.kind(),
+                            );
+                        }
 
                         // Wallpaper: use cached GPU buffer if available
                         let wallpaper = state.wallpaper.as_ref();
@@ -416,7 +475,7 @@ pub fn init_winit(
                             )
                             .unwrap();
                     }
-                    backend.submit(Some(&[damage])).unwrap();
+                    backend.borrow_mut().submit(Some(&[damage])).unwrap();
 
                     state.space.elements().for_each(|window| {
                         window.send_frame(
@@ -441,9 +500,12 @@ pub fn init_winit(
                     state.space.refresh();
                     state.popups.cleanup();
                     let _ = state.display_handle.flush_clients();
-                    // Keep frames coming until a wallpaper crossfade finishes.
-                    if state.wallpaper_fade.is_some() {
-                        backend.window().request_redraw();
+                    // Frame produced: clear the dirty flag. Chain while
+                    // animations or a wallpaper fade need continuous frames
+                    // (winit has no frame timer of its own).
+                    state.pending_redraw = false;
+                    if state.animation_manager.has_active() || state.wallpaper_fade.is_some() {
+                        backend.borrow().window().request_redraw();
                     }
                 }
                 WinitEvent::CloseRequested => {

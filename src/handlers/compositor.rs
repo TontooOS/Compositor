@@ -3,12 +3,12 @@ use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     reexports::wayland_server::{
         protocol::{wl_buffer, wl_surface::WlSurface},
-        Client,
+        Client, Resource,
     },
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            get_parent, is_sync_subsurface, CompositorClientState, CompositorHandler,
+            get_parent, is_sync_subsurface, with_states, CompositorClientState, CompositorHandler,
             CompositorState,
         },
         shm::{ShmHandler, ShmState},
@@ -50,6 +50,50 @@ impl CompositorHandler for TontooCompositor {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        // TEMP-DEBUG: SHM visibility hunt (revert after diagnosis).
+        let buf_info = with_states(surface, |states| {
+            let mut guard = states
+                .cached_state
+                .get::<smithay::wayland::compositor::SurfaceAttributes>();
+            let current = guard.current();
+            match current.buffer.as_ref() {
+            Some(smithay::wayland::compositor::BufferAssignment::NewBuffer(buf)) => {
+                smithay::wayland::shm::with_buffer_contents(&buf, |ptr, len, data| {
+                    let px0 = if (data.offset as usize) + 4 <= len {
+                        // SAFETY: TEMP-DEBUG only; reads 4 bytes inside the
+                        // mapped pool while dispatch is blocked in commit.
+                        let s = unsafe {
+                            std::slice::from_raw_parts(
+                                ptr.wrapping_add(data.offset as usize),
+                                4,
+                            )
+                        };
+                        [s[0], s[1], s[2], s[3]]
+                    } else {
+                        [0, 0, 0, 0]
+                    };
+                    format!(
+                        "shm {}x{} stride={} off={} fmt={:?} len={} px0={:?}",
+                        data.width,
+                        data.height,
+                        data.stride,
+                        data.offset,
+                        data.format,
+                        len,
+                        px0
+                    )
+                })
+                .ok()
+            }
+            Some(smithay::wayland::compositor::BufferAssignment::Removed) => {
+                Some("buffer removed".to_string())
+            }
+            None => None,
+            }
+        });
+        if let Some(info) = buf_info {
+            tracing::info!("TEMP-DEBUG commit: surf={:?} {}", surface.id(), info);
+        }
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = get_parent(&root) {

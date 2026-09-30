@@ -120,7 +120,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.socket_name.to_string_lossy()
     );
 
-    event_loop.run(None, &mut state, move |_| {})?;
+    event_loop.run(
+        None,
+        &mut state,
+        move |state| {
+            // The winit backend renders only on OS Redraw events (no frame
+            // timer): after Wayland commits or new windows set
+            // `pending_redraw`, kick a redraw so a frame actually follows.
+            #[cfg(feature = "winit")]
+            crate::render::kick_winit_redraw_if_dirty(state);
+        },
+    )?;
 
     Ok(())
 }
