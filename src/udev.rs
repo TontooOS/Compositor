@@ -688,7 +688,7 @@ fn create_wallpaper_buffer(
         wallpaper.pixels(),
         Fourcc::Abgr8888,
         wallpaper.size(),
-        false,
+        crate::wallpaper::GPU_UPLOAD_FLIPPED,
         1,
         Transform::Normal,
         None,

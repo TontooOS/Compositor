@@ -19,8 +19,10 @@ pub struct Wallpaper {
 pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>>
 ```
 
-Opens the image at `path` using the `image` crate, converts it to RGBA, and
-stores the pixel data. Logs the path, dimensions, and byte count on success.
+Opens the image at `path` using CoreImage (`TiImage::load`), downscales it
+so the longest edge fits `4096` px (GL texture safety), converts it to RGBA,
+and stores the pixel data. Rows are stored top-first (row 0 is the top of the
+image). Logs the path, dimensions, and byte count on success.
 Returns `Err` when the file cannot be opened or decoded.
 
 ### Wallpaper::pixels
@@ -86,6 +88,19 @@ reuses it on every frame. Destination quads come from `wallpaper_layout`
 | `tile` | Repeat 1:1 across the output |
 
 Unknown modes fall back to `fill`; degenerate sizes render nothing.
+
+## GPU Upload Orientation
+
+```rust
+pub const GPU_UPLOAD_FLIPPED: bool = true;
+```
+
+Pixel rows are stored top-first, but OpenGL stores row 0 at the bottom of the
+texture (`glTexImage2D` convention, see the row flips in the text rasterizers
+in `WidgetRenderer.md` and `Shell.md`). Both backends (`render.rs` winit and
+`udev.rs` DRM) therefore pass `GPU_UPLOAD_FLIPPED` as the `flipped` argument
+of `TextureBuffer::from_memory`. Uploading with `false` renders the wallpaper
+upside-down.
 
 ## Cross References
 

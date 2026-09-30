@@ -116,6 +116,15 @@ pub fn wallpaper_layout(wp_w: i32, wp_h: i32, out_w: i32, out_h: i32, fill: &str
 /// screen. Downscale to a safe size at load time.
 const MAX_DIM: u32 = 4096;
 
+/// `flipped` flag for `TextureBuffer::from_memory` wallpaper uploads.
+///
+/// `Wallpaper::pixels` stores rows top-first (row 0 is the top of the image,
+/// matching CoreImage/PNG decode order). OpenGL stores row 0 at the bottom
+/// of the texture, so the upload must be marked as Y-flipped; otherwise the
+/// wallpaper renders upside-down. See the manual row flips in the text
+/// rasterizers (`widget_renderer`, `shell::ssd`) for the same convention.
+pub const GPU_UPLOAD_FLIPPED: bool = true;
+
 impl Wallpaper {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let path_str = path.as_ref().to_str().ok_or_else(|| {

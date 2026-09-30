@@ -72,6 +72,11 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-09-30: Fix upside-down wallpapers - both backends pass
+  `wallpaper::GPU_UPLOAD_FLIPPED` (`true`) as the `flipped` argument of
+  `TextureBuffer::from_memory`, matching the top-first row order of
+  `Wallpaper::pixels` (OpenGL stores row 0 at the bottom). See
+  [Wallpaper.md](Wallpaper.md).
 - 2026-09-24: Restored this Smithay tree as `compositor/` after the
   Wayfire 0.12 experiment was removed. `BaseOS/scripts/stage-compositor.sh`
   builds `--release --no-default-features --features udev` again and stages
