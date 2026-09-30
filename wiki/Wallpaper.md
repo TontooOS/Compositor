@@ -92,15 +92,18 @@ Unknown modes fall back to `fill`; degenerate sizes render nothing.
 ## GPU Upload Orientation
 
 ```rust
-pub const GPU_UPLOAD_FLIPPED: bool = true;
+pub const GPU_UPLOAD_FLIPPED: bool = false;
 ```
 
-Pixel rows are stored top-first, but OpenGL stores row 0 at the bottom of the
-texture (`glTexImage2D` convention, see the row flips in the text rasterizers
-in `WidgetRenderer.md` and `Shell.md`). Both backends (`render.rs` winit and
-`udev.rs` DRM) therefore pass `GPU_UPLOAD_FLIPPED` as the `flipped` argument
-of `TextureBuffer::from_memory`. Uploading with `false` renders the wallpaper
-upside-down.
+`Wallpaper::load` flips the decoded (top-first) image vertically via
+CoreImage, so `pixels` stores rows bottom-first. OpenGL stores row 0 at the
+bottom of the texture (`glTexImage2D` convention, see the row flips in the
+text rasterizers in `WidgetRenderer.md` and `Shell.md`), therefore both
+backends (`render.rs` winit and `udev.rs` DRM) upload with `flipped` set to
+`GPU_UPLOAD_FLIPPED` (`false`). Passing `true` for top-first data does not
+work on this Smithay revision (the Y-flip samples out of bounds and the
+texture clamps to its top edge, showing a single stretched row); uploading
+top-first data with `false` renders the wallpaper upside-down.
 
 ## Cross References
 

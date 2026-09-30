@@ -118,12 +118,14 @@ const MAX_DIM: u32 = 4096;
 
 /// `flipped` flag for `TextureBuffer::from_memory` wallpaper uploads.
 ///
-/// `Wallpaper::pixels` stores rows top-first (row 0 is the top of the image,
-/// matching CoreImage/PNG decode order). OpenGL stores row 0 at the bottom
-/// of the texture, so the upload must be marked as Y-flipped; otherwise the
-/// wallpaper renders upside-down. See the manual row flips in the text
-/// rasterizers (`widget_renderer`, `shell::ssd`) for the same convention.
-pub const GPU_UPLOAD_FLIPPED: bool = true;
+/// `Wallpaper::pixels` stores rows bottom-first: `load` flips the decoded
+/// (top-first) image vertically via CoreImage, because OpenGL stores row 0
+/// at the bottom of the texture. Uploading top-first data with `true` does
+/// not work on this Smithay revision (the Y-flip samples out of bounds and
+/// the texture clamps to its top edge), and uploading it with `false`
+/// renders the wallpaper upside-down. Same convention as the manual row
+/// flips in the text rasterizers (`widget_renderer`, `shell::ssd`).
+pub const GPU_UPLOAD_FLIPPED: bool = false;
 
 impl Wallpaper {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
@@ -147,7 +149,10 @@ impl Wallpaper {
             img
         };
         let (width, height) = img.dimensions();
-        let rgba = img.into_rgba().into_raw();
+        // Flip to bottom-first row order for the OpenGL upload (see
+        // `GPU_UPLOAD_FLIPPED`). The layout quads in `wallpaper_layout` are
+        // unaffected: flipping only mirrors the sampled image content.
+        let rgba = img.flip_vertical().into_rgba().into_raw();
         tracing::info!(
             "Loaded wallpaper {:?}: {}x{} ({} bytes)",
             path.as_ref(),
@@ -250,5 +255,30 @@ mod tests {
         assert_eq!(wallpaper_layout(800, 600, 1920, 1080, "melt").len(), 1);
         assert!(wallpaper_layout(0, 600, 1920, 1080, "fill").is_empty());
         assert!(wallpaper_layout(800, 600, 0, 1080, "fill").is_empty());
+    }
+
+    #[test]
+    fn load_stores_rows_bottom_first_for_gl() {
+        // 1x2 image: top row red, bottom row blue (top-first encode order).
+        let src = TiImage::new(
+            1,
+            2,
+            vec![255, 0, 0, 255, 0, 0, 255, 255],
+        )
+        .unwrap();
+        let path = std::env::temp_dir().join("tontoo_wallpaper_orient_test.png");
+        src.save(
+            path.to_str().unwrap(),
+            sdk::CoreImage::ImageFormat::Png,
+            100,
+        )
+        .unwrap();
+        let wp = Wallpaper::load(&path).unwrap();
+        assert_eq!(wp.size(), (1, 2));
+        // Row 0 of the pixel buffer must hold the image bottom row (blue),
+        // matching OpenGL bottom-first upload order with `GPU_UPLOAD_FLIPPED`.
+        assert_eq!(&wp.pixels()[0..4], &[0, 0, 255, 255]);
+        assert_eq!(&wp.pixels()[4..8], &[255, 0, 0, 255]);
+        let _ = std::fs::remove_file(&path);
     }
 }
