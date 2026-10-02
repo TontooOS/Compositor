@@ -56,3 +56,10 @@ libseat = { version = "0.2", optional = true }
 gbm = { version = "0.16", optional = true, default-features = false, features = ["drm-support"] }
 input = { version = "0.9", optional = true }
 rustix = { version = "0.38", optional = true, features = ["fs", "process"] }
+
+# TontooOS fork of the pinned Smithay rev with the client-buffer Y-flip fix
+# (see TONTOO-PATCHES.md in that repo). Replace the file:// URL with the real
+# remote once the fork is pushed; delete this block to build against the
+# pinned git revision again.
+[patch."https://github.com/Smithay/smithay.git"]
+smithay = { git = "file:///root/smithay-patched", branch = "tontoo" }

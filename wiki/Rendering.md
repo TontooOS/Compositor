@@ -47,19 +47,37 @@ On each `Redraw` event:
 > compositor now uses Client-Side Decorations (CSD): each app draws its own
 > decoration bar. See [WaylandHandlers.md](WaylandHandlers.md).
 
+## Element Order Contract
+
+`OutputDamageTracker::render_output` takes the element slice in
+**front-to-back order** and walks it with `.rev()`, so the **first** element of
+the slice is the **topmost** one and is drawn last. The udev backend builds its
+list that way (cursor inserted at index 0, wallpaper pushed last); the winit
+backend builds it bottom-to-top for readability and calls
+`all_elements.reverse()` right before `render_output`.
+
+> **Note:** Passing the list in the wrong direction is silent and total: the
+> opaque wallpaper is drawn last and covers every window, cursor, overlay and
+> layer surface. Symptom: the desktop shows the wallpaper only, while
+> `space_windows` in the `TEMP-DEBUG` log is greater than zero.
+
 ## Z-Order (Winit)
 
-The winit backend pushes elements bottom-to-top (the renderer composites
-back-to-front):
+Build order in `src/render.rs` (bottom-to-top), after `all_elements.reverse()`
+the effective front-to-back order is:
 
-1. `Wallpaper`
-2. Background/Bottom layer-shell surfaces
-3. `WindowShadow` (3-layer shadow with vertical bias)
-3. `Space` (client windows, CSD)
-4. `WindowBorder`
-5. `TontooUi`
-6. Top/Overlay layer-shell surfaces (e.g. `Menubar.app`, `Dock.app`)
-7. `CursorTexture` / `CursorSurface`
+| # | Element | Note |
+|---|---|---|
+| 1 | `CursorSurface` | client cursor surface, topmost |
+| 2 | `CursorTexture` | XCursor theme texture |
+| 3 | `TontooUi` (display overlays) | brightness dim and night light warmth |
+| 4 | layer surfaces `Top` / `Overlay` | e.g. `Menubar.app` |
+| 5 | `TontooUi` (tontoo_ui surfaces) | declarative widget-tree apps |
+| 6 | `Space` (client windows, CSD) | window content |
+| 7 | SSD titlebars | `shell::ssd::push_ssd_elements`, above their window |
+| 8 | layer surfaces `Background` / `Bottom` | e.g. `Dock.app` |
+| 9 | `Wallpaper` (crossfade overlay) | incoming wallpaper during a fade |
+| 10 | `Wallpaper` | pushed last, bottommost |
 
 > **Note:** Neither the top bar nor the dock is rendered here. They are
 > the external `Menubar.app` / `Dock.app` system apps (see
@@ -68,19 +86,40 @@ back-to-front):
 
 ## Z-Order (Udev)
 
-The DRM compositor uses front-to-back ordering. Elements are pushed in
-reverse and the cursor is inserted at index 0:
+The DRM compositor builds the same front-to-back list directly: cursor and
+client cursor surface are inserted at index 0, the wallpaper is pushed last.
+See `render_output_elements` in `src/udev.rs`.
 
-1. `CursorTexture` / `CursorSurface` (index 0, inserted last)
-2. Top/Overlay layer-shell surfaces (e.g. `Menubar.app`, `Dock.app`)
-3. `WindowBorder`
-4. `Space` (CSD)
-5. `TontooUi`
-6. `WindowShadow`
-7. Background/Bottom layer-shell surfaces
-8. `Wallpaper` (pushed last, rendered bottommost)
+## Client Buffer Orientation (Smithay Fork)
 
-## Window Decorations
+Client surfaces are only upright if the GL renderer imports `wl_shm` data with
+`y_inverted: true` **and** applies a correct V-flip. Upstream Smithay at the
+pinned revision `d4bb0de` fails both, so the compositor builds against a fork:
+
+```toml
+[patch."https://github.com/Smithay/smithay.git"]
+smithay = { git = "file:///root/smithay-patched", branch = "tontoo" }
+```
+
+| Fix | File | Change |
+|---|---|---|
+| shm import orientation | `backend/renderer/gles/mod.rs` | `import_shm_buffer` created the texture with a hardcoded `y_inverted: false` while uploading top-down `wl_shm` rows, so every client surface rendered upside down. Now `y_inverted: true`. |
+| V-flip matrix | `backend/renderer/gles/mod.rs` | The `y_inverted` matrix used `v' = -v` instead of `v' = 1 - v`, sampling outside `[0, 1]`; with `CLAMP_TO_EDGE` the texture collapsed to its top row. |
+
+> **Note:** Both fixes are required. Without the matrix fix, the
+> `y_inverted: true` from the first fix samples out of bounds. This is also
+> why the compositor pre-flips its **own** textures on the CPU
+> (`GPU_UPLOAD_FLIPPED`, `shell::ssd`, `widget_renderer`): the workaround was
+> written before the fork existed.
+
+## Known Issues
+
+| Symptom | Scope | Note |
+|---|---|---|
+| Element geometry mirrored vertically (window at `height - y - height`, cursor moves up when the pointer moves down) | winit backend under WSL/WSLg | Not reproducible on the udev/DRM backend (ISO): wallpaper, dock and menubar are oriented correctly there. The output is presented flipped by the Mesa software GL path, which the compositor does not compensate in `src/render.rs`. |
+| Nothing repaints while the winit window is occluded or minimized | winit backend | winit drops `RedrawRequested` for occluded windows; winit has no idle pump, so `kick_winit_redraw_if_dirty` only helps once a redraw is delivered. |
+
+
 
 The compositor uses **Client-Side Decorations (CSD)**. Neither a shadow nor a
 border is drawn any more: apps and the GTK theme own their own frame, and the

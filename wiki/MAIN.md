@@ -72,6 +72,20 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-10-02: Invisible client windows in the winit backend — the element list
+  was built bottom-to-top but `OutputDamageTracker::render_output` composites
+  **front-to-back** (it walks the slice with `.rev()`), so the opaque wallpaper
+  was drawn last and covered every window, cursor, overlay and layer surface.
+  `src/render.rs` now calls `all_elements.reverse()` before rendering; the
+  udev backend already built the list in the correct order. See
+  [Rendering.md](Rendering.md).
+- 2026-10-02: Client surfaces rendered upside down — `smithay::import_shm_buffer`
+  created the GL texture with a hardcoded `y_inverted: false` while uploading
+  top-down `wl_shm` rows, and the `y_inverted` flip matrix used `v' = -v`
+  instead of `v' = 1 - v` (sampling outside `[0, 1]`). `Cargo.toml` now
+  patches the pinned revision with the TontooOS fork
+  (`file:///root/smithay-patched`, branch `tontoo`, see `TONTOO-PATCHES.md`
+  there). See [Rendering.md](Rendering.md).
 - 2026-10-02: Harden `parse_widget_tree` — the wire `node_count` and
   `child_count` are checked against the bytes left in the buffer before they
   reach `Vec::with_capacity`. Any client could previously send four bytes and

@@ -247,7 +247,11 @@ pub fn init_winit(
                         let mut all_elements: Vec<TontooRenderElements> =
                             Vec::with_capacity(space_elements.len() + 8);
 
-                        // Z-order: Wallpaper → Window Shadows → Space → Window Borders → Window Controls → Cursor
+                        // Build order below is bottom-to-top: Wallpaper → crossfade →
+                        // Background/Bottom layers → Space windows → SSD titlebars →
+                        // TontooUI surfaces → Top/Overlay layers → display overlays →
+                        // cursor. `render_output` wants the opposite (front-to-back),
+                        // so the list is flipped right before rendering.
                         // NOTE: no compositor-side menubar or dock. The top bar is the external
                         // Menubar.app system app and the bottom dock is the external Dock.app
                         // system app (both start via LaunchPad as layer-shell surfaces).
@@ -426,6 +430,13 @@ pub fn init_winit(
                         if let Some(e) = surface_cursor {
                             all_elements.push(TontooRenderElements::CursorSurface(e));
                         }
+
+                        // `OutputDamageTracker::render_output` composites
+                        // front-to-back: it walks the slice with `.rev()`, so the
+                        // first element is the topmost one. Flip the bottom-to-top
+                        // list built above, otherwise the opaque wallpaper is drawn
+                        // last and covers every window, cursor and overlay.
+                        all_elements.reverse();
 
                         let result = damage_tracker
                             .render_output(
