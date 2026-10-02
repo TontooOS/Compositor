@@ -7,8 +7,6 @@ use crate::config::ColorScheme;
 pub type TexBuf = smithay::backend::renderer::element::texture::TextureBuffer<GlesTexture>;
 
 pub struct RenderCache {
-    pub window_shadows: HashMap<(i32, i32, ColorScheme), TexBuf>,
-    pub window_borders: HashMap<(i32, i32, ColorScheme), TexBuf>,
     /// Cached titlebar textures: (width, height, ColorScheme) -> TexBuf
     pub window_titlebars: HashMap<(i32, i32, ColorScheme), TexBuf>,
     /// Cached traffic light dot textures: (color_name, size, scale, ColorScheme) -> TexBuf
@@ -21,8 +19,6 @@ pub struct RenderCache {
 impl RenderCache {
     pub fn new() -> Self {
         Self {
-            window_shadows: HashMap::new(),
-            window_borders: HashMap::new(),
             window_titlebars: HashMap::new(),
             traffic_light_dots: HashMap::new(),
             traffic_light_symbols: HashMap::new(),
@@ -48,8 +44,6 @@ impl RenderCache {
     }
 
     pub fn invalidate(&mut self) {
-        self.window_shadows.clear();
-        self.window_borders.clear();
         self.window_titlebars.clear();
         self.traffic_light_dots.clear();
         self.traffic_light_symbols.clear();

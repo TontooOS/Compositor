@@ -104,6 +104,10 @@ pub struct TontooCompositor {
     /// State for the custom `tontoo_ui` Wayland protocol.
     pub tontoo_ui: TontooUiState,
 
+    /// Reusable offscreen target for the desktop backdrop stream
+    /// (see `crate::backdrop`). Shared by both backends.
+    pub backdrop_capture: crate::backdrop::BackdropCapture,
+
     /// The currently focused window surface (for 2-click behavior and active app tracking).
     pub focused_surface: Option<WlSurface>,
 
@@ -264,6 +268,7 @@ impl TontooCompositor {
             animation_manager: crate::animation::AnimationManager::new(),
             shell: ShellState::new(),
             tontoo_ui: TontooUiState::default(),
+            backdrop_capture: crate::backdrop::BackdropCapture::new(),
             focused_surface: None,
             minimized_windows: Vec::new(),
             minimized_icons: HashSet::new(),

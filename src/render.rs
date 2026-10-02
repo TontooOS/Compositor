@@ -24,9 +24,7 @@ use smithay::{
 };
 
 use crate::cursor::{
-    CursorRenderElement, CursorTextureElement,
-    TontooRenderElements, WallpaperElement, WindowBorderElement,
-    WindowShadowElement,
+    CursorRenderElement, CursorTextureElement, TontooRenderElements, WallpaperElement,
 };
 use crate::wallpaper::Wallpaper;
 use crate::TontooCompositor;
@@ -142,6 +140,7 @@ pub fn init_winit(
                     let screen_w = size.w as f32;
                     let screen_h = size.h as f32;
                     let damage = Rectangle::from_size(size);
+                    let frame_damage: Vec<Rectangle<i32, Physical>>;
 
                     {
                         let mut backend_ref = backend.borrow_mut();
@@ -285,52 +284,9 @@ pub fn init_winit(
                             }
                         }
 
-                        if false {
-                            let blur = crate::render::WINDOW_SHADOW_BLUR;
-                            let pad = blur as i32 + 4;
-                            let offset_y = crate::render::WINDOW_SHADOW_OFFSET_Y;
-                            for window in state.space.elements() {
-                                if let Some(geo) = state.space.element_geometry(window) {
-                                    let win_w = geo.size.w;
-                                    let win_h = geo.size.h;
-                                    // Shadow (cached)
-                                    let shadow_key = (win_w, win_h, state.color_scheme);
-                                    if !state.render_cache.window_shadows.contains_key(&shadow_key) {
-                                        if let Some(buf) = create_window_shadow_texture(renderer, win_w, win_h, state.color_scheme) {
-                                            state.render_cache.window_shadows.insert(shadow_key, buf);
-                                        }
-                                    }
-                                    if let Some(ref shadow_buf) = state.render_cache.window_shadows.get(&shadow_key) {
-                                        let shadow_pos = Point::from((
-                                            (geo.loc.x - pad) as f64,
-                                            (geo.loc.y as f64) - pad as f64 + offset_y,
-                                        ));
-                                        let shadow_size = Size::from((win_w + pad * 2, win_h + pad * 2));
-                                        let elem = TextureRenderElement::from_texture_buffer(
-                                            shadow_pos, shadow_buf, None, None,
-                                            Some(shadow_size), Kind::Unspecified,
-                                        );
-                                        all_elements.push(TontooRenderElements::WindowShadow(WindowShadowElement(elem)));
-                                    }
-                                    // Border + rounded-corner mask (cached)
-                                    let border_key = (win_w, win_h, state.color_scheme);
-                                    if !state.render_cache.window_borders.contains_key(&border_key) {
-                                        if let Some(buf) = create_window_border_mask_texture(renderer, win_w, win_h, state.color_scheme) {
-                                            state.render_cache.window_borders.insert(border_key, buf);
-                                        }
-                                    }
-                                    if let Some(ref border_buf) = state.render_cache.window_borders.get(&border_key) {
-                                        let elem = TextureRenderElement::from_texture_buffer(
-                                            Point::from((geo.loc.x as f64, geo.loc.y as f64)),
-                                            border_buf, None, None,
-                                            Some(Size::from((win_w, win_h))),
-                                            Kind::Unspecified,
-                                        );
-                                        all_elements.push(TontooRenderElements::WindowBorder(WindowBorderElement(elem)));
-                                    }
-                                }
-                            }
-                        }
+                        // No compositor-side window shadow or border: apps and
+                        // the GTK theme draw their own frame (see
+                        // `create_window_shadow_texture`, kept for reference).
 
                         // Client windows
                         for elem in space_elements {
@@ -371,15 +327,21 @@ pub fn init_winit(
                             let sx = (screen_w - surf_w) / 2.0;
                             let sy = (screen_h - surf_h) / 2.0;
 
-                            // Window background
-                            if let Some(glass) = &surf.glass {
-                                if let Some(elem) = crate::widget_renderer::WidgetRenderer::render_glass_cmd(
-                                    renderer, sx, sy, surf_w, surf_h, glass.milkiness, glass.alpha,
-                                ) {
-                                    all_elements.push(TontooRenderElements::TontooUi(
-                                        crate::cursor::TontooUiTextureElement(elem)));
+                            // Window background. The compositor never blurs:
+                            // glass is a flat tint unless reduce transparency
+                            // asks for a solid scheme color instead.
+                            let use_tint = !state.accessibility.reduce_transparency;
+                            if use_tint {
+                                if let Some(glass) = &surf.glass {
+                                    if let Some(elem) = crate::widget_renderer::WidgetRenderer::render_glass_cmd(
+                                        renderer, sx, sy, surf_w, surf_h, glass.milkiness, glass.alpha,
+                                    ) {
+                                        all_elements.push(TontooRenderElements::TontooUi(
+                                            crate::cursor::TontooUiTextureElement(elem)));
+                                    }
                                 }
-                            } else {
+                            }
+                            if !use_tint || surf.glass.is_none() {
                                 let bg = match surf.color_scheme {
                                     crate::handlers::tontoo_ui::TontooColorScheme::Dark =>
                                         crate::widget_renderer::Color::new(0.114, 0.114, 0.118, 1.0),
@@ -465,7 +427,7 @@ pub fn init_winit(
                             all_elements.push(TontooRenderElements::CursorSurface(e));
                         }
 
-                        damage_tracker
+                        let result = damage_tracker
                             .render_output(
                                 renderer,
                                 &mut framebuffer,
@@ -474,6 +436,38 @@ pub fn init_winit(
                                 state.color_scheme.clear_color(),
                             )
                             .unwrap();
+                        frame_damage = result.damage.cloned().unwrap_or_default();
+                        // Release the output frame so the renderer can draw
+                        // the backdrop stream into its own target.
+                        drop(framebuffer);
+
+                        // Desktop backdrop stream: clients that render their
+                        // own glass blur get the pixels below their window.
+                        let wallpaper_for_backdrop = if let (Some(buf), Some(fade), Some(alpha)) =
+                            (
+                                state.wallpaper_fade_buffer.as_ref(),
+                                state.wallpaper_fade.as_ref(),
+                                fade_alpha,
+                            ) {
+                            Some((buf, &fade.next, state.wallpaper_fill.as_str(), Some(alpha)))
+                        } else {
+                            state
+                                .wallpaper_buffer
+                                .as_ref()
+                                .zip(state.wallpaper.as_ref())
+                                .map(|(buf, wp)| (buf, wp, state.wallpaper_fill.as_str(), None))
+                        };
+                        crate::backdrop::update_streams(
+                            &mut state.tontoo_ui,
+                            &state.space,
+                            wallpaper_for_backdrop,
+                            state.accessibility.reduce_transparency,
+                            renderer,
+                            &output,
+                            Some(&frame_damage),
+                            &mut state.backdrop_capture,
+                            state.color_scheme.clear_color(),
+                        );
                     }
                     backend.borrow_mut().submit(Some(&[damage])).unwrap();
 
@@ -577,162 +571,4 @@ fn winit_wallpaper_elements(
         })
         .collect()
 }
-
-// ── Rounded-rect helper (shared by window shadows / borders) ──
-
-fn render_signed_dist_rounded(x: f64, y: f64, w: f64, h: f64, r: f64) -> f64 {
-    let dx = x.max(r).min(w - r) - x;
-    let dy = y.max(r).min(h - r) - y;
-    (dx * dx + dy * dy).sqrt() - r
-}
-
-// ── Window decoration constants (macOS Tahoe 1:1) ──
-
-pub const WINDOW_CORNER_RADIUS: f64 = 12.0;
-pub const WINDOW_SHADOW_OFFSET_Y: f64 = 6.0;
-pub const WINDOW_SHADOW_BLUR: f64 = 25.0;
-pub const WINDOW_SHADOW_BASE_ALPHA_DARK: f64 = 0.20;
-pub const WINDOW_SHADOW_BASE_ALPHA_LIGHT: f64 = 0.12;
-pub const WINDOW_BORDER_WIDTH: f64 = 0.5;
-// (Server-side titlebar textures live in `shell::ssd`, shared by both backends.)
-
-/// Create a window shadow texture.
-/// Returns a buffer of size (tex_w, tex_h) containing a gaussian-blurred
-/// dark rounded-rect shadow centered in the texture.
-pub fn create_window_shadow_texture(
-    renderer: &mut GlesRenderer,
-    win_w: i32,
-    win_h: i32,
-    color_scheme: crate::config::ColorScheme,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let cr = WINDOW_CORNER_RADIUS;
-    let blur = WINDOW_SHADOW_BLUR;
-    let pad = blur as i32 + 4;
-    let tex_w = win_w + pad * 2;
-    let tex_h = win_h + pad * 2;
-    if tex_w <= 0 || tex_h <= 0 {
-        return None;
-    }
-    let tw = tex_w as u32;
-    let th = tex_h as u32;
-    let mut data = vec![0u8; (tw * th * 4) as usize];
-
-    let base_alpha = match color_scheme {
-        crate::config::ColorScheme::Dark => WINDOW_SHADOW_BASE_ALPHA_DARK,
-        crate::config::ColorScheme::Light => WINDOW_SHADOW_BASE_ALPHA_LIGHT,
-    };
-
-    let win_wf = win_w as f64;
-    let win_hf = win_h as f64;
-    let pad_f = pad as f64;
-
-    for y in 0..th {
-        for x in 0..tw {
-            // Distance from the window's rounded-rect edge (window is centered in texture)
-            let wx = x as f64 - pad_f;
-            let wy = y as f64 - pad_f;
-            let dist = render_signed_dist_rounded(wx, wy, win_wf, win_hf, cr);
-
-            // Shadow: outside the window rect (dist > 0), gaussian falloff
-            let shadow_alpha = if dist > 0.0 {
-                let norm = dist / blur;
-                let gauss = (-norm * norm * 0.5).exp();
-                (gauss * base_alpha * 255.0).min(255.0) as u8
-            } else {
-                // Inside the window rect → transparent (shadow is behind window)
-                0
-            };
-
-            let i = ((y * tw + x) * 4) as usize;
-            data[i] = 0;     // B
-            data[i + 1] = 0; // G
-            data[i + 2] = 0; // R
-            data[i + 3] = shadow_alpha;
-        }
-    }
-
-    TextureBuffer::from_memory(
-        renderer,
-        &data,
-        Fourcc::Abgr8888,
-        (tex_w, tex_h),
-        false,
-        1,
-        Transform::Normal,
-        None,
-    )
-    .ok()
-}
-
-/// Create a window border + rounded-corner mask texture.
-/// - Corners outside the rounded rect → filled with bg_color (masks the sharp window corners)
-/// - 1px border stroke along the rounded rect edge
-/// - Everything else → transparent (window content shows through)
-pub fn create_window_border_mask_texture(
-    renderer: &mut GlesRenderer,
-    win_w: i32,
-    win_h: i32,
-    color_scheme: crate::config::ColorScheme,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let cr = WINDOW_CORNER_RADIUS;
-    let bw = WINDOW_BORDER_WIDTH;
-    let tw = win_w as u32;
-    let th = win_h as u32;
-    if tw == 0 || th == 0 {
-        return None;
-    }
-    let mut data = vec![0u8; (tw * th * 4) as usize];
-
-    // Background color for corner masking (matches clear_color)
-    let (bg_r, bg_g, bg_b) = match color_scheme {
-        crate::config::ColorScheme::Dark => (28u8, 28u8, 28u8),    // #1d1d1d
-        crate::config::ColorScheme::Light => (236u8, 236u8, 236u8), // #ececec
-    };
-    // Border color (subtle shadow)
-    let (bd_r, bd_g, bd_b, bd_a) = match color_scheme {
-        crate::config::ColorScheme::Dark => (0u8, 0u8, 0u8, 60u8),     // rgba(0,0,0,0.24) subtle dark shadow
-        crate::config::ColorScheme::Light => (0u8, 0u8, 0u8, 25u8),    // rgba(0,0,0,0.10) very subtle
-    };
-
-    for y in 0..th {
-        for x in 0..tw {
-            let dist = render_signed_dist_rounded(x as f64, y as f64, tw as f64, th as f64, cr);
-            let i = ((y * tw + x) * 4) as usize;
-
-            if dist > 0.0 {
-                // Outside rounded rect → background color (mask the corner)
-                data[i] = bg_r;
-                data[i + 1] = bg_g;
-                data[i + 2] = bg_b;
-                data[i + 3] = 255;
-            } else if dist > -bw {
-                // Border stroke zone (within bw pixels of the edge)
-                let edge_alpha = ((-dist) / bw).min(1.0);
-                data[i] = bd_r;
-                data[i + 1] = bd_g;
-                data[i + 2] = bd_b;
-                data[i + 3] = (bd_a as f64 * edge_alpha) as u8;
-            } else {
-                // Interior → transparent (window content visible)
-                data[i] = 0;
-                data[i + 1] = 0;
-                data[i + 2] = 0;
-                data[i + 3] = 0;
-            }
-        }
-    }
-
-    TextureBuffer::from_memory(
-        renderer,
-        &data,
-        Fourcc::Abgr8888,
-        (win_w, win_h),
-        false,
-        1,
-        Transform::Normal,
-        None,
-    )
-    .ok()
-}
-
-// (Server-side titlebar textures live in `shell::ssd`, shared by both backends.)
+// (Server-side titlebar textures live in shell::ssd, shared by both backends.)

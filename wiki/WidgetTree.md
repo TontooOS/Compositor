@@ -106,6 +106,17 @@ pub fn parse_widget_tree(data: &[u8]) -> Option<Vec<FlatWidget>>
 Returns a vector of `FlatWidget`s or `None` if the binary data is malformed.
 All node IDs are sequential starting at 0.
 
+Every count on the wire is validated against the bytes left in the buffer
+before it reaches a `Vec::with_capacity`:
+
+| Count | Minimum bytes per entry | Rejected when |
+|---|---|---|
+| `node_count` | 1 (type tag) | greater than the remaining bytes |
+| `child_count` | 4 (node id) | greater than remaining bytes / 4 |
+
+Without those checks a client could send four arbitrary bytes and make the
+compositor reserve gigabytes, aborting the whole session.
+
 ## Hit Testing
 
 ### hit_test

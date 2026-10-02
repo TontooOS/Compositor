@@ -72,10 +72,12 @@ pub struct TontooUiSurfaceState {
     pub mapped: bool,
     pub surface_resource: Option<TontooUiSurface>,
     pub last_hovered_node: Option<usize>,
+    pub backdrop: BackdropStream,
 }
 ```
 
-Defaults: width 800, height 600, color scheme dark, no glass effect.
+Defaults: width 800, height 600, color scheme dark, no glass effect, backdrop
+stream disabled.
 
 ## TontooColorScheme
 
@@ -110,6 +112,12 @@ Controls the frosted-glass effect: tint intensity (`milkiness`), background
 alpha (`alpha`), and Gaussian blur radius (`sigma`). Defaults: 0.5 / 0.6 /
 20.0.
 
+`sigma` is only meaningful for widget-tree surfaces the compositor draws
+itself. It is stored and reported but never applied: the compositor no longer
+blurs anything, `render_glass_cmd` draws a flat translucent quad. Client
+rendered apps (TontooUI) get their blur from the backdrop stream instead, see
+[Backdrop.md](Backdrop.md).
+
 ## Requests
 
 | Request | Description |
@@ -119,6 +127,9 @@ alpha (`alpha`), and Gaussian blur radius (`sigma`). Defaults: 0.5 / 0.6 /
 | `set_title` | Sets the surface title |
 | `set_size` | Sets the surface size (clamped to min 1x1) |
 | `set_glass` | Sets glass effect; all-zero disables it |
+| `set_backdrop` | Enables the backdrop stream for a window |
+| `create_backdrop_buffer` | Client passes its shared memory file descriptor |
+| `ack_backdrop` | Client confirms it copied a streamed frame |
 | `update_widget_tree` | Sends a serialized widget tree |
 | `set_color_scheme` | Sets the surface color scheme |
 | `request_close` | Client asks to close (currently only logged) |
@@ -133,6 +144,7 @@ alpha (`alpha`), and Gaussian blur radius (`sigma`). Defaults: 0.5 / 0.6 /
 | `widget_hovered` | Pointer hovered a widget, sends node id |
 | `key_event` | Keyboard event forwarded to the surface |
 | `configure` | Configures the surface size |
+| `backdrop` | New desktop backdrop frame in the shared buffer |
 | `close` | Requests the client to close |
 
 ## Wire Format

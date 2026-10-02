@@ -1,5 +1,6 @@
 mod accessibility;
 mod animation;
+mod backdrop;
 mod config;
 mod cursor;
 mod display;
@@ -8,7 +9,6 @@ mod handlers;
 mod input;
 mod protocol;
 pub mod render_cache;
-mod shaders;
 pub mod shell;
 mod settings_ipc;
 mod state;

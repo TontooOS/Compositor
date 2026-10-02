@@ -82,20 +82,19 @@ reverse and the cursor is inserted at index 0:
 
 ## Window Decorations
 
-The compositor now uses **Client-Side Decorations (CSD)**. Only the shadow
-and border are drawn by the compositor; the titlebar/traffic lights are
-drawn by each client. Constants match the improved multi-layer macOS Tahoe
-shadow:
+The compositor uses **Client-Side Decorations (CSD)**. Neither a shadow nor a
+border is drawn any more: apps and the GTK theme own their own frame, and the
+only geometry left in this module is the corner radius kept for the
+compositor side decoration helper.
 
 | Constant | Value |
 |---|---|
-| `WINDOW_CORNER_RADIUS` | 10.0 |
-| `WINDOW_SHADOW_OFFSET_Y` | 12.0 |
-| `WINDOW_SHADOW_BLUR` | 60.0 (max far layer) |
-| `WINDOW_SHADOW_BASE_ALPHA_DARK` | 0.38 |
-| `WINDOW_SHADOW_BASE_ALPHA_LIGHT` | 0.22 |
-| `WINDOW_BORDER_WIDTH` | 0.7 |
-| `TITLEBAR_HEIGHT` | 32 (kept for backward compat, not rendered) |
+| `WINDOW_CORNER_RADIUS` | 12.0 |
+| `WINDOW_SHADOW_OFFSET_Y` | 6.0 |
+| `WINDOW_SHADOW_BLUR` | 25.0 |
+| `WINDOW_SHADOW_BASE_ALPHA_DARK` | 0.20 |
+| `WINDOW_SHADOW_BASE_ALPHA_LIGHT` | 0.12 |
+| `WINDOW_BORDER_WIDTH` | 0.5 |
 
 ### create_window_shadow_texture
 
@@ -107,17 +106,13 @@ pub fn create_window_shadow_texture(
 ) -> Option<TextureBuffer<GlesTexture>>
 ```
 
-Generates a high-quality 3-layer Gaussian shadow around a rounded rectangle:
+> **Unused.** The function is kept for reference but has no caller: the
+> shadow block in the winit pipeline was removed, and the udev backend
+> already delegates shadows to the GTK theme.
 
-- **tight** (blur 14) — contact/umbra
-- **medium** (blur 30) — main penumbra
-- **far** (blur 60) — soft ambient diffuse
-
-Layers are weighted `0.50 / 0.32 / 0.18` and multiplied by
-`WINDOW_SHADOW_BASE_ALPHA_*`. A vertical bias makes the shadow ~18%
-stronger at the bottom than at the top, matching macOS's key-light model.
-The texture extends 64 px beyond the window on all sides (`pad = 64`) and
-is vertically offset by `WINDOW_SHADOW_OFFSET_Y` (12 px).
+Generates a single-layer Gaussian shadow around a rounded rectangle. The
+texture extends `WINDOW_SHADOW_BLUR + 4` px beyond the window on all sides
+and is vertically offset by `WINDOW_SHADOW_OFFSET_Y`.
 
 ### create_window_border_mask_texture
 
@@ -129,9 +124,12 @@ pub fn create_window_border_mask_texture(
 ) -> Option<TextureBuffer<GlesTexture>>
 ```
 
-Creates a rounded-corner mask with a 0.7 px border. The background is filled
+Creates a rounded-corner mask with a 0.5 px border. The background is filled
 with the clear color (`#1d1d1d` dark / `#ececec` light); the border is
 semi-transparent black.
+
+> **Unused.** The border block in the winit pipeline was removed; the GTK
+> theme draws the frame for GTK apps and TontooUI apps draw their own.
 
 ### create_window_titlebar_texture
 
@@ -153,6 +151,11 @@ pub fn create_window_titlebar_texture(
 > **Removed.** `create_glass_texture` and `box_blur_5x5` were deleted
 > with the internal dock (their only caller). The external `Dock.app`
 > draws its own glass panel.
+
+The compositor does not blur. Widget-tree clients still get the flat
+translucent `GlassPanel` quad from [WidgetRenderer.md](WidgetRenderer.md), and
+client rendered apps (TontooUI) receive the desktop backdrop through the
+stream documented in [Backdrop.md](Backdrop.md) and blur it themselves.
 
 ### signed_dist_rounded
 
@@ -192,4 +195,5 @@ titles on the winit backend.
 - [UdevBackend.md](UdevBackend.md) -- udev backend uses the same rendering
   primitives
 - [RenderCache.md](RenderCache.md) -- cached textures avoid per-frame uploads
-- [Shaders.md](Shaders.md) -- blur shaders (placeholder, not integrated)
+- [Backdrop.md](Backdrop.md) -- offscreen capture and readback used for the
+  client side blur

@@ -44,7 +44,7 @@ it is the external `Dock.app` system app (see [Dock.md](Dock.md)).
 | WindowsIpc | [WindowsIpc.md](WindowsIpc.md) | CoreWindows socket: window listing and actions |
 | SettingsIpc | [SettingsIpc.md](SettingsIpc.md) | Settings daemon socket: extensible settings ops |
 | Display | [Display.md](Display.md) | Outputs, refresh switching, brightness and night light |
-| Shaders | [Shaders.md](Shaders.md) | Gaussian blur GLSL shaders |
+| Backdrop | [Backdrop.md](Backdrop.md) | Desktop backdrop stream so clients blur their own glass |
 
 ## Quick Start
 
@@ -71,6 +71,30 @@ See [State.md](State.md) for the initialization flow and [Input.md](Input.md)
 for built-in shortcuts.
 
 ## Changelog
+
+- 2026-10-02: Harden `parse_widget_tree` — the wire `node_count` and
+  `child_count` are checked against the bytes left in the buffer before they
+  reach `Vec::with_capacity`. Any client could previously send four bytes and
+  make the compositor reserve gigabytes and abort. See
+  [WidgetTree.md](WidgetTree.md).
+- 2026-10-02: Client side blur over a shared backdrop (`src/backdrop.rs`,
+  new `tontoo_ui` messages `create_backdrop_buffer`, `set_backdrop`,
+  `ack_backdrop` and the `backdrop` event): the compositor renders the
+  elements *below* a window into an offscreen target at 1/2 resolution, reads
+  the pixels back into a client provided shared file and sends the rect; the
+  client (TontooUI) runs its own WGSL blur over it. Recapture only happens on
+  a fresh client ack or when the frame damage touches the window rect, so a
+  static desktop behind a static window costs nothing after the first frame.
+  See [Backdrop.md](Backdrop.md).
+- 2026-10-02: Removed the dead blur infrastructure: `src/shaders.rs`
+  (`BlurPass` and the GLSL pair were never instantiated), the `if false`
+  window shadow/border block in `render.rs`, the commented out shadow and
+  border blocks plus the dead shadow/border texture generators in `udev.rs`,
+  the unused `RenderCache::{window_shadows, window_borders}` maps and the
+  `Shaders.md` wiki page. `AccessibilitySettings::reduce_transparency`
+  is now real: it disables both the widget-tree glass panel and the backdrop
+  stream. See [Accessibility.md](Accessibility.md) and
+  [WidgetRenderer.md](WidgetRenderer.md).
 
 - 2026-09-30: Fix upside-down wallpapers - `Wallpaper::load` flips decoded
   rows to bottom-first via CoreImage and both backends upload with

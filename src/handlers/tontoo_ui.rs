@@ -97,6 +97,8 @@ pub struct TontooUiSurfaceState {
     pub surface_resource: Option<protocol::tontoo_ui::tontoo_ui_surface::TontooUiSurface>,
     /// Last hovered widget node (for hover event deduplication).
     pub last_hovered_node: Option<usize>,
+    /// Desktop backdrop stream for this surface (see `crate::backdrop`).
+    pub backdrop: crate::backdrop::BackdropStream,
 }
 
 impl TontooUiSurfaceState {
@@ -114,6 +116,7 @@ impl TontooUiSurfaceState {
             mapped: false,
             surface_resource: None,
             last_hovered_node: None,
+            backdrop: crate::backdrop::BackdropStream::new(),
         }
     }
 }
@@ -260,6 +263,86 @@ pub fn handle_update_widget_tree(state: &mut TontooUiState, surface_id: &ObjectI
     }
 }
 
+/// Handle a `create_backdrop_buffer` request: map the client file.
+///
+/// The generated request carries an `OwnedFd`, so the descriptor is consumed
+/// either way. A rejected geometry closes it again, which is exactly what the
+/// client expects when it retries.
+pub fn handle_create_backdrop_buffer(
+    state: &mut TontooUiState,
+    surface_id: &ObjectId,
+    fd: std::os::fd::OwnedFd,
+    width: i32,
+    height: i32,
+    stride: i32,
+) {
+    use std::os::unix::io::IntoRawFd;
+
+    let Some(surface) = state.get_surface_mut(surface_id) else {
+        drop(fd);
+        return;
+    };
+    match crate::backdrop::BackdropBuffer::new(fd.into_raw_fd(), width, height, stride) {
+        Some(buffer) => {
+            tracing::debug!(
+                "tontoo_ui: backdrop buffer {}x{} stride {}",
+                width,
+                height,
+                stride
+            );
+            surface.backdrop.buffer = Some(buffer);
+            // A new buffer invalidates the last captured rect.
+            surface.backdrop.last_region = None;
+        }
+        None => {
+            tracing::warn!(
+                "tontoo_ui: rejected backdrop buffer {}x{} stride {}",
+                width,
+                height,
+                stride
+            );
+            surface.backdrop.buffer = None;
+        }
+    }
+}
+
+/// Handle a `set_backdrop` request.
+pub fn handle_set_backdrop(
+    state: &mut TontooUiState,
+    surface_id: &ObjectId,
+    enabled: u32,
+    scale: u32,
+    wl_surface_id: u32,
+) {
+    let Some(surface) = state.get_surface_mut(surface_id) else {
+        return;
+    };
+    let enabled = enabled != 0;
+    surface.backdrop.enabled = enabled;
+    surface.backdrop.scale = crate::backdrop::clamp_scale(scale);
+    surface.backdrop.wl_surface_id = wl_surface_id;
+    if !enabled {
+        // Drop the subscription state so re-enabling starts from scratch.
+        surface.backdrop.last_region = None;
+        surface.backdrop.pending_ack = None;
+    }
+    tracing::debug!(
+        "tontoo_ui: backdrop enabled={} scale={} surface={}",
+        enabled,
+        surface.backdrop.scale,
+        wl_surface_id
+    );
+}
+
+/// Handle an `ack_backdrop` request: the client copied the frame.
+pub fn handle_ack_backdrop(state: &mut TontooUiState, surface_id: &ObjectId, serial: u32) {
+    if let Some(surface) = state.get_surface_mut(surface_id) {
+        if surface.backdrop.pending_ack == Some(serial) {
+            surface.backdrop.pending_ack = None;
+        }
+    }
+}
+
 /// Handle a `set_color_scheme` request.
 pub fn handle_set_color_scheme(state: &mut TontooUiState, surface_id: &ObjectId, scheme: u32) {
     if let Some(surface) = state.get_surface_mut(surface_id) {
@@ -342,6 +425,13 @@ impl TontooUiSurfaceState {
     pub fn send_configure(&self, width: i32, height: i32) {
         if let Some(resource) = &self.surface_resource {
             resource.configure(width, height);
+        }
+    }
+
+    /// Announce a captured backdrop frame. See `crate::backdrop`.
+    pub fn send_backdrop(&self, serial: u32, x: i32, y: i32, width: i32, height: i32, scale: u32) {
+        if let Some(resource) = &self.surface_resource {
+            resource.backdrop(serial, x, y, width, height, scale);
         }
     }
 
@@ -434,6 +524,32 @@ impl Dispatch<protocol::tontoo_ui::tontoo_ui_surface::TontooUiSurface, ()>
             }
             protocol::tontoo_ui::tontoo_ui_surface::Request::SetGlass { milkiness, alpha, sigma } => {
                 super::tontoo_ui::handle_set_glass(&mut state.tontoo_ui, &surface_id, milkiness as f32, alpha as f32, sigma as f32);
+                state.pending_redraw = true;
+            }
+            protocol::tontoo_ui::tontoo_ui_surface::Request::SetBackdrop { enabled, scale, wl_surface_id } => {
+                super::tontoo_ui::handle_set_backdrop(
+                    &mut state.tontoo_ui,
+                    &surface_id,
+                    enabled,
+                    scale,
+                    wl_surface_id,
+                );
+                state.pending_redraw = true;
+            }
+            protocol::tontoo_ui::tontoo_ui_surface::Request::CreateBackdropBuffer { fd, width, height, stride } => {
+                super::tontoo_ui::handle_create_backdrop_buffer(
+                    &mut state.tontoo_ui,
+                    &surface_id,
+                    fd,
+                    width,
+                    height,
+                    stride,
+                );
+                state.pending_redraw = true;
+            }
+            protocol::tontoo_ui::tontoo_ui_surface::Request::AckBackdrop { serial } => {
+                super::tontoo_ui::handle_ack_backdrop(&mut state.tontoo_ui, &surface_id, serial);
+                // The ack unblocks the next capture.
                 state.pending_redraw = true;
             }
             protocol::tontoo_ui::tontoo_ui_surface::Request::UpdateWidgetTree { nodes } => {

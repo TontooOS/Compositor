@@ -20,6 +20,12 @@ pub struct AccessibilitySettings {
 
 The default is both flags `false`.
 
+`reduce_transparency` is consulted by both glass paths: the render loops
+skip the widget-tree glass panel and fall back to the solid scheme color, and
+the backdrop stream in [Backdrop.md](Backdrop.md) stops capturing, so a client
+never receives a `backdrop` event and its glass falls back to a plain
+translucent tint.
+
 ### AccessibilitySettings::load
 
 ```rust
@@ -52,7 +58,9 @@ directory cannot be resolved or the file cannot be written.
 ## Cross References
 
 - [State.md](State.md) -- `TontooCompositor::accessibility` field
-- [Rendering.md](Rendering.md) -- glass effects are candidates for the
-  `reduce_transparency` flag
+- [Backdrop.md](Backdrop.md) -- the backdrop stream is disabled by
+  `reduce_transparency`
+- [WidgetRenderer.md](WidgetRenderer.md) -- the glass panel that
+  `reduce_transparency` replaces with a solid fill
 - [Animation.md](Animation.md) -- animations are candidates for the
   `reduce_motion` flag

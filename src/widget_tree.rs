@@ -56,6 +56,11 @@ struct BinaryReader<'a> {
 impl<'a> BinaryReader<'a> {
     fn new(data: &'a [u8]) -> Self { Self { data, pos: 0 } }
 
+    /// Bytes left in the buffer. Every count read from the wire is checked
+    /// against this before it reaches a `Vec::with_capacity`, so a client
+    /// cannot make the compositor allocate gigabytes.
+    fn remaining(&self) -> usize { self.data.len().saturating_sub(self.pos) }
+
     fn read_u8(&mut self) -> Option<u8> {
         if self.pos >= self.data.len() { return None; }
         let v = self.data[self.pos]; self.pos += 1; Some(v)
@@ -96,6 +101,8 @@ impl<'a> BinaryReader<'a> {
 pub fn parse_widget_tree(data: &[u8]) -> Option<Vec<FlatWidget>> {
     let mut r = BinaryReader::new(data);
     let node_count = r.read_u32()? as usize;
+    // Each node costs at least its one byte type tag.
+    if node_count > r.remaining() { return None; }
     let mut widgets = Vec::with_capacity(node_count);
 
     for node_id in 0..node_count {
@@ -113,6 +120,8 @@ pub fn parse_widget_tree(data: &[u8]) -> Option<Vec<FlatWidget>> {
         let bw = r.read_f32()?;
         let bh = r.read_f32()?;
         let child_count = r.read_u32()? as usize;
+        // Each child reference costs four bytes.
+        if child_count > r.remaining() / 4 { return None; }
         let mut children = Vec::with_capacity(child_count);
         for _ in 0..child_count {
             children.push(r.read_u32()? as usize);

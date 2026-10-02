@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -42,15 +41,11 @@ use smithay::{
         input::Libinput,
         wayland_server::DisplayHandle,
     },
-    utils::{Clock, DeviceFd, IsAlive, Monotonic, Physical, Point, Rectangle, Size, Transform},
+    utils::{Clock, DeviceFd, Monotonic, Physical, Point, Rectangle, Size, Transform},
     wayland::shell::wlr_layer::Layer as WlrLayer,
 };
 
-use crate::cursor::{
-    CursorRenderElement, CursorTextureElement,
-    TontooRenderElements, WallpaperElement, WindowBorderElement,
-    WindowShadowElement,
-};
+use crate::cursor::{CursorRenderElement, CursorTextureElement, TontooRenderElements, WallpaperElement};
 use crate::{wallpaper::Wallpaper, TontooCompositor};
 
 pub(crate) type TontooDrmCompositor = DrmCompositor<
@@ -633,7 +628,9 @@ pub fn try_render_all(state: &mut TontooCompositor) {
     let wallpaper_fade_buffer = &mut state.wallpaper_fade_buffer;
     let seat = &state.seat;
     let render_cache = &mut state.render_cache;
-    let tontoo_ui = &state.tontoo_ui;
+    let tontoo_ui = &mut state.tontoo_ui;
+    let backdrop_capture = &mut state.backdrop_capture;
+    let reduce_transparency = state.accessibility.reduce_transparency;
     let window_controls = &mut state.shell.window_controls;
     let color_scheme = state.color_scheme;
     let wallpaper_fill = state.wallpaper_fill.clone();
@@ -667,6 +664,8 @@ pub fn try_render_all(state: &mut TontooCompositor) {
                 display_night_light,
                 render_cache,
                 tontoo_ui,
+                backdrop_capture,
+                reduce_transparency,
                 state.focused_surface.as_ref(),
                 window_controls,
                 color_scheme,
@@ -733,171 +732,6 @@ fn wallpaper_elements(
         .collect()
 }
 
-/// Signed distance to rounded rectangle (negative = inside, positive = outside).
-fn signed_dist_rounded(x: f64, y: f64, w: f64, h: f64, r: f64) -> f64 {
-    let dx = x.max(r).min(w - r) - x;
-    let dy = y.max(r).min(h - r) - y;
-    (dx * dx + dy * dy).sqrt() - r
-}
-
-// ── Window decoration constants (macOS Tahoe 1:1) ──
-// CSD: compositor only draws shadow + border; apps draw their own header.
-
-const WINDOW_CORNER_RADIUS: f64 = 10.0;
-const WINDOW_SHADOW_OFFSET_Y: f64 = 8.0;
-const WINDOW_SHADOW_BLUR: f64 = 40.0;
-const WINDOW_SHADOW_BASE_ALPHA_DARK: f64 = 0.22;
-const WINDOW_SHADOW_BASE_ALPHA_LIGHT: f64 = 0.13;
-const WINDOW_BORDER_WIDTH: f64 = 0.7;
-
-/// Create a high-quality window shadow texture — 3-layer Gaussian model
-/// (tight/medium/far) with vertical bias for realistic macOS-style drop shadow.
-fn create_window_shadow_texture(
-    renderer: &mut GlesRenderer,
-    win_w: i32,
-    win_h: i32,
-    color_scheme: crate::config::ColorScheme,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let cr = WINDOW_CORNER_RADIUS;
-    let pad: i32 = 40;
-    let tex_w = win_w + pad * 2;
-    let tex_h = win_h + pad * 2;
-    if tex_w <= 0 || tex_h <= 0 {
-        return None;
-    }
-    let tw = tex_w as u32;
-    let th = tex_h as u32;
-    let mut data = vec![0u8; (tw * th * 4) as usize];
-
-    let base_alpha = match color_scheme {
-        crate::config::ColorScheme::Dark => WINDOW_SHADOW_BASE_ALPHA_DARK,
-        crate::config::ColorScheme::Light => WINDOW_SHADOW_BASE_ALPHA_LIGHT,
-    };
-
-    let win_wf = win_w as f64;
-    let win_hf = win_h as f64;
-    let pad_f = pad as f64;
-
-    for y in 0..th {
-        for x in 0..tw {
-            let wx = x as f64 - pad_f;
-            let wy = y as f64 - pad_f;
-            let dist = signed_dist_rounded(wx, wy, win_wf, win_hf, cr);
-
-            let shadow_alpha = if dist > 0.0 {
-                let tight = (-0.5 * (dist / 10.0).powi(2)).exp();
-                let medium = (-0.5 * (dist / 22.0).powi(2)).exp();
-                let far = (-0.5 * (dist / 40.0).powi(2)).exp();
-                let intensity = 0.30 * tight + 0.30 * medium + 0.40 * far;
-                // Smooth fade to transparent at texture edge (outer 12px) to avoid hard cutoff
-                let edge_fade = ((pad_f - dist) / 12.0).clamp(0.0, 1.0);
-                let center_y = pad_f + win_hf / 2.0;
-                let dy_center = y as f64 - center_y;
-                let bias_norm = (dy_center / (win_hf / 2.0 + pad_f)).clamp(-1.0, 1.0);
-                let bias = bias_norm * 0.15;
-                ((intensity * edge_fade * base_alpha * (1.0 + bias) * 255.0).clamp(0.0, 255.0)) as u8
-            } else {
-                0
-            };
-
-            let i = ((y * tw + x) * 4) as usize;
-            data[i] = 0;
-            data[i + 1] = 0;
-            data[i + 2] = 0;
-            data[i + 3] = shadow_alpha;
-        }
-    }
-
-    TextureBuffer::from_memory(
-        renderer, &data, Fourcc::Abgr8888, (tex_w, tex_h),
-        false, 1, Transform::Normal, None,
-    ).ok()
-}
-
-/// Create a window border + rounded-corner mask texture with proper anti-aliasing.
-/// Outside the rounded rect is filled with the desktop clear color (matching the
-/// wallpaper fallback), and the rounded edge has 1-2px feather to avoid pixely corners.
-fn create_window_border_mask_texture(
-    renderer: &mut GlesRenderer,
-    win_w: i32,
-    win_h: i32,
-    color_scheme: crate::config::ColorScheme,
-) -> Option<TextureBuffer<GlesTexture>> {
-    let cr = WINDOW_CORNER_RADIUS;
-    let bw = WINDOW_BORDER_WIDTH;
-    let tw = win_w as u32;
-    let th = win_h as u32;
-    if tw == 0 || th == 0 {
-        return None;
-    }
-    let mut data = vec![0u8; (tw * th * 4) as usize];
-
-    let (bg_r, bg_g, bg_b) = match color_scheme {
-        crate::config::ColorScheme::Dark => (28u8, 28u8, 28u8),
-        crate::config::ColorScheme::Light => (236u8, 236u8, 236u8),
-    };
-    let (bd_r, bd_g, bd_b, bd_a) = match color_scheme {
-        crate::config::ColorScheme::Dark => (0u8, 0u8, 0u8, 60u8),
-        crate::config::ColorScheme::Light => (0u8, 0u8, 0u8, 25u8),
-    };
-
-    for y in 0..th {
-        for x in 0..tw {
-            let dist = signed_dist_rounded(x as f64, y as f64, tw as f64, th as f64, cr);
-            let i = ((y * tw + x) * 4) as usize;
-
-            if dist > 1.0 {
-                data[i] = bg_r;
-                data[i + 1] = bg_g;
-                data[i + 2] = bg_b;
-                data[i + 3] = 255;
-            } else if dist > 0.0 {
-                let aa = (1.0 - dist).clamp(0.0, 1.0) as f32;
-                data[i] = (bg_r as f32 * (1.0f32 - aa * 0.5f32) + bd_r as f32 * aa * 0.5) as u8;
-                data[i + 1] = (bg_g as f32 * (1.0f32 - aa * 0.5f32) + bd_g as f32 * aa * 0.5) as u8;
-                data[i + 2] = (bg_b as f32 * (1.0f32 - aa * 0.5f32) + bd_b as f32 * aa * 0.5) as u8;
-                data[i + 3] = (255.0 * (1.0f32 - aa * 0.5f32) + bd_a as f32 * aa * 0.5) as u8;
-            } else if dist > -bw {
-                let edge_alpha = ((-dist) / bw).min(1.0);
-                let aa = if dist > -0.5 { 1.0 - (-dist - 0.5).abs() * 2.0 } else { 1.0 };
-                let aa = aa.clamp(0.0, 1.0);
-                data[i] = bd_r;
-                data[i + 1] = bd_g;
-                data[i + 2] = bd_b;
-                data[i + 3] = (bd_a as f64 * edge_alpha * aa) as u8;
-            } else if dist > -bw - 1.0 {
-                let aa = (dist + bw + 1.0).clamp(0.0, 1.0);
-                data[i] = bd_r;
-                data[i + 1] = bd_g;
-                data[i + 2] = bd_b;
-                data[i + 3] = (bd_a as f64 * aa * 0.5) as u8;
-            } else {
-                data[i] = 0;
-                data[i + 1] = 0;
-                data[i + 2] = 0;
-                data[i + 3] = 0;
-            }
-        }
-    }
-
-    TextureBuffer::from_memory(
-        renderer, &data, Fourcc::Abgr8888, (win_w, win_h),
-        false, 1, Transform::Normal, None,
-    ).ok()
-}
-
-// (Server-side titlebar textures live in `shell::ssd`, shared by both backends.)
-
-/// Derive ColorScheme from clear_color (reverse of ColorScheme::clear_color).
-fn clear_color_to_scheme(clear_color: [f32; 4]) -> crate::config::ColorScheme {
-    // Dark clear_color = [0.11, 0.11, 0.11, 1.0], Light = [0.93, 0.93, 0.93, 1.0]
-    if clear_color[0] < 0.5 {
-        crate::config::ColorScheme::Dark
-    } else {
-        crate::config::ColorScheme::Light
-    }
-}
-
 fn render_surface(
     surface: &mut SurfaceData,
     renderer: &mut GlesRenderer,
@@ -914,13 +748,45 @@ fn render_surface(
     display_brightness: f32,
     display_night_light: bool,
     render_cache: &mut crate::render_cache::RenderCache,
-    tontoo_ui: &crate::handlers::tontoo_ui::TontooUiState,
+    tontoo_ui: &mut crate::handlers::tontoo_ui::TontooUiState,
+    backdrop_capture: &mut crate::backdrop::BackdropCapture,
+    reduce_transparency: bool,
     focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
     window_controls: &mut std::collections::HashMap<String, crate::shell::window_controls::WindowControls>,
     color_scheme: crate::config::ColorScheme,
 ) -> Result<(), SwapBuffersError> {
     let output = &surface.output;
     let output_geo = space.output_geometry(output).unwrap_or_default();
+
+    // Desktop backdrop stream, drawn before the output frame: clients that
+    // render their own glass blur get the pixels below their window and do
+    // the blur themselves. The DRM compositor reports no per frame damage,
+    // so the stream relies on the client handshake plus its own cadence.
+    {
+        let backdrop_wallpaper = if let (Some(buf), Some(fade), Some(alpha)) = (
+            wallpaper_fade_buffer.as_ref(),
+            wallpaper_fade,
+            fade_alpha,
+        ) {
+            Some((buf, &fade.next, wallpaper_fill, Some(alpha)))
+        } else {
+            wallpaper_buffer
+                .as_ref()
+                .zip(wallpaper)
+                .map(|(buf, wp)| (buf, wp, wallpaper_fill, None))
+        };
+        crate::backdrop::update_streams(
+            tontoo_ui,
+            space,
+            backdrop_wallpaper,
+            reduce_transparency,
+            renderer,
+            output,
+            None,
+            backdrop_capture,
+            clear_color,
+        );
+    }
 
     let space_elements = space_render_elements(renderer, std::iter::once(space), output, 1.0)
         .map_err(|_| {
@@ -987,39 +853,9 @@ fn render_surface(
         }
     }
 
-    // 2. Client windows + decorations (CSD: shadow + border only, no server titlebar)
-    // DRM renders front-to-back: push order = [topmost, ..., bottommost]
-    // Cursor is inserted at index 0 later → shifts everything +2
-    // So push: borders (topmost) → windows → shadows (bottommost)
+    // 2. Client windows + decorations. No compositor-side shadow or border:
+    // apps and the GTK theme draw their own frame.
     {
-        let pad: i32 = 64;
-        let _offset_y = WINDOW_SHADOW_OFFSET_Y;
-
-        // Borders disabled - now handled by GTK theme (TontooOS-Dark/Light) for GTK apps only
-        // See BaseOS/archiso/airootfs/usr/share/themes/TontooOS-*/gtk-3.0/gtk.css
-        // Keeping shadows in compositor for non-GTK windows, but no rounded border mask.
-        // for window in space.elements() {
-        //     if !window.alive() { continue; }
-        //     if let Some(geo) = space.element_geometry(window) {
-        //         if geo.size.w <= 0 || geo.size.h <= 0 { continue; }
-        //         let border_key = (geo.size.w, geo.size.h, clear_color_to_scheme(clear_color));
-        //         if !render_cache.window_borders.contains_key(&border_key) {
-        //             if let Some(buf) = create_window_border_mask_texture(renderer, geo.size.w, geo.size.h, clear_color_to_scheme(clear_color)) {
-        //                 render_cache.window_borders.insert(border_key, buf);
-        //             }
-        //         }
-        //         if let Some(ref buf) = render_cache.window_borders.get(&border_key) {
-        //             let elem = TextureRenderElement::from_texture_buffer(
-        //                 Point::from((geo.loc.x as f64, geo.loc.y as f64)),
-        //                 buf, None, None,
-        //                 Some(Size::from((geo.size.w, geo.size.h))),
-        //                 Kind::Unspecified,
-        //             );
-        //             all_elements.push(TontooRenderElements::WindowBorder(WindowBorderElement(elem)));
-        //         }
-        //     }
-        // }
-
         // Server-side titlebars for SSD windows (Chrome/VSCode with system
         // title bar). Pushed before the window batch: DRM renders front to
         // back, so bars land above their windows. CSD windows draw their
@@ -1063,14 +899,20 @@ fn render_surface(
                 let sx = (sw - surf_w) / 2.0;
                 let sy = (sh - surf_h) / 2.0;
 
-                if let Some(glass) = &surf.glass {
-                    if let Some(elem) = crate::widget_renderer::WidgetRenderer::render_glass_cmd(
-                        renderer, sx, sy, surf_w, surf_h, glass.milkiness, glass.alpha,
-                    ) {
-                        all_elements.push(TontooRenderElements::TontooUi(
-                            crate::cursor::TontooUiTextureElement(elem)));
+                // No compositor blur: glass is a flat tint unless reduce
+                // transparency asks for a solid scheme color instead.
+                let use_tint = !reduce_transparency;
+                if use_tint {
+                    if let Some(glass) = &surf.glass {
+                        if let Some(elem) = crate::widget_renderer::WidgetRenderer::render_glass_cmd(
+                            renderer, sx, sy, surf_w, surf_h, glass.milkiness, glass.alpha,
+                        ) {
+                            all_elements.push(TontooRenderElements::TontooUi(
+                                crate::cursor::TontooUiTextureElement(elem)));
+                        }
                     }
-                } else {
+                }
+                if !use_tint || surf.glass.is_none() {
                     let bg = match surf.color_scheme {
                         crate::handlers::tontoo_ui::TontooColorScheme::Dark =>
                             crate::widget_renderer::Color::new(0.114, 0.114, 0.118, 1.0),
@@ -1096,33 +938,6 @@ fn render_surface(
                 }
             }
         }
-
-        // Shadows disabled for now - GTK theme's decoration box-shadow now handles it
-        // Compositor shadows were 10px rounded with custom blur, now let GTK's 24px decoration do it
-        // for window in space.elements() {
-        //     if !window.alive() { continue; }
-        //     if let Some(geo) = space.element_geometry(window) {
-        //         if geo.size.w <= 0 || geo.size.h <= 0 { continue; }
-        //         let shadow_key = (geo.size.w, geo.size.h, clear_color_to_scheme(clear_color));
-        //         if !render_cache.window_shadows.contains_key(&shadow_key) {
-        //             if let Some(buf) = create_window_shadow_texture(renderer, geo.size.w, geo.size.h, clear_color_to_scheme(clear_color)) {
-        //                 render_cache.window_shadows.insert(shadow_key, buf);
-        //             }
-        //         }
-        //         if let Some(ref buf) = render_cache.window_shadows.get(&shadow_key) {
-        //             let shadow_pos = Point::from((
-        //                 (geo.loc.x - pad) as f64,
-        //                 (geo.loc.y as f64) - pad as f64 + offset_y,
-        //             ));
-        //             let shadow_size = Size::from((geo.size.w + pad * 2, geo.size.h + pad * 2));
-        //             let elem = TextureRenderElement::from_texture_buffer(
-        //                 shadow_pos, &*buf, None, None,
-        //                 Some(shadow_size), Kind::Unspecified,
-        //             );
-        //             all_elements.push(TontooRenderElements::WindowShadow(WindowShadowElement(elem)));
-        //         }
-        //     }
-        // }
     }
 
     // Layer-shell surfaces below windows (Background/Bottom layers).
