@@ -374,6 +374,11 @@ impl TontooCompositor {
 
                                 // Track focused surface
                                 self.focused_surface = Some(window_surface.clone());
+                                // Remember it for the layer-shell path: a
+                                // keyboard-interactive layer surface takes the
+                                // keyboard while it is mapped and hands it
+                                // back to this window when it closes.
+                                self.last_window_focus = Some(window_surface.clone());
                             } else {
                                 tracing::debug!("Window click: passing through to '{}'",
                                     window_app_name(&window).unwrap_or_default());

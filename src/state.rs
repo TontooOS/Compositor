@@ -115,6 +115,11 @@ pub struct TontooCompositor {
     /// The currently focused window surface (for 2-click behavior and active app tracking).
     pub focused_surface: Option<WlSurface>,
 
+    /// The last space window that held the keyboard. A keyboard-interactive
+    /// layer surface (the dock's LaunchPad grid) takes focus while it is
+    /// mapped; this is where the keyboard goes back to when it closes.
+    pub last_window_focus: Option<WlSurface>,
+
     /// Windows minimized by SSD / windows-ipc as (display name, window) pairs.
     /// The external Dock.app restores them via `restore_window`.
     pub minimized_windows: Vec<(String, Window)>,
@@ -275,6 +280,7 @@ impl TontooCompositor {
             backdrop_capture: crate::backdrop::BackdropCapture::new(),
             backdrop_geometry: crate::backdrop::BackdropGeometry::new(),
             focused_surface: None,
+            last_window_focus: None,
             minimized_windows: Vec::new(),
             minimized_icons: HashSet::new(),
             maximized_restore: HashMap::new(),

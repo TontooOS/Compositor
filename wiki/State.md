@@ -36,11 +36,19 @@ pub struct TontooCompositor {
     pub shell: ShellState,
     pub tontoo_ui: TontooUiState,
     pub focused_surface: Option<WlSurface>,
+    pub last_window_focus: Option<WlSurface>,
     pub render_cache: RenderCache,
     #[cfg(feature = "udev")]
     pub udev_data: Option<crate::udev::UdevData>,
 }
 ```
+
+### Focus Tracking
+
+| Field | Type | Description |
+|---|---|---|
+| `focused_surface` | `Option<WlSurface>` | Surface that currently holds the keyboard: a space window after a click, a layer surface while a keyboard-interactive one is mapped, `None` after a click on empty space |
+| `last_window_focus` | `Option<WlSurface>` | Last space window that held the keyboard, so a keyboard-interactive layer surface can hand it back when it closes (see [Input.md](Input.md)) |
 
 ### TontooCompositor::new
 

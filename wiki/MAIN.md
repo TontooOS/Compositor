@@ -72,6 +72,21 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-10-03: Keyboard focus for layer surfaces. A layer surface mapped with
+  `KeyboardInteractivity::Exclusive` or `OnDemand` now takes the keyboard
+  when it is mapped and returns it when it is destroyed, so a modal overlay
+  can own a text field: the dock's LaunchPad grid opens above the dock bar
+  in the same process and is typeable right away. Before, only space
+  windows were ever focused (`input.rs` focuses them on click), so a layer
+  client received no keys at all. `WlrLayerShellHandler` reads
+  `can_receive_keyboard_focus()` before the surface moves into the layer
+  map, stores the previous owner in the new
+  `ShellState::last_window_focus` and moves `focused_surface` with the
+  keyboard. `layer_destroyed` restores the remembered window (or drops
+  focus). The dock bar and the menubar map with `None` and are unaffected.
+  See [WaylandHandlers.md](WaylandHandlers.md), [Input.md](Input.md) and
+  [State.md](State.md).
+
 - 2026-10-02: Backdrop recapture switched from frame damage to an explicit
   `dirty` flag. Frame damage is the union of every element including the
   window itself, so a window repainting its own glass forced a

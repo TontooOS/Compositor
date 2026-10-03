@@ -154,9 +154,21 @@ fn new_layer_surface(
 Maps the layer surface onto the first available output. Logs a warning when
 no output is available.
 
+A surface that asked for keyboard interactivity (`Exclusive` or
+`OnDemand`, read through `LayerSurface::can_receive_keyboard_focus`) also
+**takes the keyboard while it is mapped**: the window that had focus is
+stored in `ShellState::last_window_focus`, `keyboard.set_focus` moves to
+the layer surface and `focused_surface` follows. This is the only way a
+layer surface is ever focused -- `input.rs` focuses space windows on click
+only -- and it is what lets a modal grid own a search field. See
+[Input.md](Input.md).
+
 ### layer_destroyed
 
-Unmaps the destroyed layer surface from the layer map.
+Unmaps the destroyed layer surface from the layer map. When the destroyed
+surface held the keyboard, focus returns to
+`ShellState::last_window_focus` (or is dropped when there was none), so
+typing continues in the previously active window.
 
 ### Layer configure cycle (`CompositorHandler::commit`)
 

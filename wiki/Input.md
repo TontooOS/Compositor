@@ -67,6 +67,16 @@ On button press, the following elements are checked in order:
 > handled here — windows use Client-Side Decorations. Move is via the
 > client's `xdg_toplevel.move_request`.
 
+#### Keyboard Focus Owners
+
+Pointer clicks focus space windows (step 3 above) and record the winner in
+`ShellState::last_window_focus`. Layer surfaces are the other owner: a
+surface mapped with `KeyboardInteractivity::Exclusive` or `OnDemand` takes
+the keyboard on map and gives it back to `last_window_focus` when it is
+destroyed, both from `WlrLayerShellHandler` (see
+[WaylandHandlers.md](WaylandHandlers.md)). The dock's LaunchPad grid is such
+a surface; the dock bar and the menubar are not, so they stay pointer only.
+
 #### Pointer Axis
 
 Forwards horizontal and vertical scroll events with v120 discrete values.
