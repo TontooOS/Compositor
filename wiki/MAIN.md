@@ -72,6 +72,14 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-10-03: Qt applications now get the macOS traffic lights. Qt does not
+  paint client-side decoration titlebars through `QStyle`; on Wayland it loads
+  a `wayland-decoration-client` plugin named by `QT_WAYLAND_DECORATION`, so
+  `apply_color_scheme_env` now exports that variable with the value `tontoo`.
+  Without it Qt falls back to the stock `bradient` plugin, which puts plain
+  window buttons on the right edge. The plugin lives in the QtDecoration repo
+  and is built by `BaseOS/scripts/stage-qt-decoration.sh`. See
+  [WindowControls.md](WindowControls.md).
 - 2026-10-02: Invisible client windows in the winit backend — the element list
   was built bottom-to-top but `OutputDamageTracker::render_output` composites
   **front-to-back** (it walks the slice with `.rev()`), so the opaque wallpaper

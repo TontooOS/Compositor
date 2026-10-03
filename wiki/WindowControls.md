@@ -8,6 +8,14 @@ header. The compositor forces `ClientSide` for every window, so the
 `shell::ssd` titlebar module below is currently dormant (kept as a
 fallback); it reuses the geometry and pixel helpers documented here.
 
+> **Note:** Qt needs an extra step that GTK does not. Qt never draws
+> titlebars through `QStyle`; on Wayland it loads a
+> `wayland-decoration-client` plugin, and the stock one (`bradient`) puts
+> plain buttons on the right. `apply_color_scheme_env` therefore exports
+> `QT_WAYLAND_DECORATION=tontoo`, and the TontooOS plugin from the
+> QtDecoration repo reproduces the geometry and colors from this page.
+> See the QtDecoration wiki for the mechanism.
+
 ## Server-Side Decorations (`shell::ssd`)
 
 | Item | Value |
@@ -70,6 +78,9 @@ Per-app traffic-light configs ship with each App Store installer via
 the shared `BaseOS/app-store/lib/tontoo-app-theme.sh` helpers
 (Firefox `userChrome.css` per profile, VSCode `settings.json` merge);
 Chromium needs nothing (GTK colors plus portal are automatic).
+Qt applications are covered by the `tontoo` decoration plugin selected
+through `QT_WAYLAND_DECORATION`, not by the qt5ct palette, because the
+palette only reaches widget contents and never the titlebar.
 
 ### Known limitations
 
