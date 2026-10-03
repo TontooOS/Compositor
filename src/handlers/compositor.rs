@@ -106,6 +106,10 @@ impl CompositorHandler for TontooCompositor {
             {
                 window.on_commit();
             }
+            // New pixels that a backdrop stream shows through its glass.
+            // Windows and layer surfaces (dock, menubar) count; popups sit
+            // above everything and cannot be behind a window.
+            crate::backdrop::dirty_from_commit(&mut self.tontoo_ui, &self.space, &root);
         };
 
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);

@@ -98,26 +98,83 @@ so the id stays valid.
 
 | Divisor | Meaning |
 |---|---|
-| 1 | One buffer pixel per output pixel (full resolution, slowest) |
-| 2 | Half resolution (default) |
+| 1 | One buffer pixel per output pixel (full resolution) |
+| 2 | Half resolution (the default a client gets when it sends `0`) |
 | 4 | Quarter resolution (cheapest, still smooth after a blur) |
 
-Blur hides the missing resolution, so a divisor of 2 or 4 is visually
-indistinguishable from full resolution for frosted surfaces.
+With the redraw policy below a static backdrop is captured exactly once, so
+the readback is not a per-frame cost and **1 is the right choice for a panel
+that only opens over a still desktop**: full resolution means the client blur
+runs on real pixels. Divisors above 1 only pay off when the content behind the
+window actually animates, where the smaller readback buys back frame rate.
 
 ## Redraw Policy
 
 Capturing costs one extra draw pass plus one `glReadPixels`, and
 `glReadPixels` stalls the pipeline until the copy finished. The compositor
-therefore only recaptures when
+therefore captures **only when the backdrop actually changed**, and never
+while a previous frame is still unacknowledged.
 
-- the client asked for a new frame (`ack_backdrop` received or the window
-  moved or resized), or
-- the damage of the last presented frame intersects the window rect,
+The trigger is an explicit `dirty` flag, not frame damage. Frame damage is
+the union of every element, including the window itself, so a window that
+repaints its own glass would force a capture on every frame even when the
+desktop behind it never moves. Instead:
 
-and never while a previous frame is still unacknowledged. With a static
-desktop behind a static window the compositor stops working entirely after
-the first frame.
+| Source | Effect |
+|---|---|
+| `set_backdrop` enabling the stream | `dirty` |
+| `CompositorHandler::commit` for a surface whose rect intersects the stream rect | `dirty` |
+| Any change in the per-frame window geometry snapshot | `dirty` on every stream |
+| `set_wallpaper`, wallpaper crossfade finished | `dirty` on every stream |
+| `apply_display` changed brightness or night light | `dirty` on every stream |
+| Window geometry differs from the last captured rect | captures directly |
+
+Two details matter:
+
+- **Commit filtering.** A stream is only dirtied when the committed surface
+  actually overlaps its rect, and never for the surface it watches. The
+  menubar clock repaints once a second; without the overlap test it would
+  keep invalidating a panel in the middle of the screen.
+- **Geometry snapshot.** Moving, resizing, maximizing or fullscreening a
+  window produces no buffer commit at all, so `commit` cannot see it.
+  `BackdropGeometry::refresh` compares one `Vec` of `(protocol id, rect)` per
+  frame and dirties everything on a change. That single comparison covers
+  drag, resize, shortcuts, the windows IPC, mapping, unmapping and
+  layer-surface repositioning.
+
+With a static desktop behind a static window the compositor captures once
+and then stops working entirely.
+
+### Self-heal
+
+X11 surfaces repaint through `XWayland` and never reach
+`CompositorHandler::commit`, so a video playing behind a TontooOS window
+would freeze the backdrop for good. A `1 s` cadence covers that.
+
+The cadence is **only active while an X11 window overlaps the stream rect**,
+detected by `untracked_overlap` (`Window::toplevel` is `None` exactly for X11
+windows). On a pure Wayland desktop it never fires, which is what makes
+"captured exactly once over a still desktop" true. A stream over an X11
+window keeps refreshing once a second, which is the only case where that
+matters.
+
+A failed capture sets `retry_after` one second out, so a rect that
+permanently does not fit the client buffer cannot spin the offscreen pass
+every frame.
+
+## Tracing
+
+`capture` logs at debug level:
+
+| Field | Meaning |
+|---|---|
+| `x`, `y`, `w`, `h` | Captured rect in physical pixels |
+| `scale` | Downscale divisor |
+| `reason` | `dirty`, `moved` or `self-heal` |
+| `captures` | Running counter for this stream |
+
+A stream over a static desktop should stay at `captures: 1` until something
+behind it moves.
 
 ## Reduce Transparency
 
@@ -151,7 +208,11 @@ Per `tontoo_ui_surface` stream state, stored in `TontooUiSurfaceState`.
 | `buffer` | Client shared mapping, `None` before `create_backdrop_buffer` |
 | `serial` | Counter, incremented on every sent frame |
 | `pending_ack` | Serial waiting for `ack_backdrop`, blocks the next capture |
-| `last_region` | Last captured rect, used to detect moves and resizes |
+| `last_region` | Last captured rect in physical pixels, detects moves and resizes |
+| `dirty` | Set when something behind the window changed, cleared on capture |
+| `retry_after` | Blocks a retry after a failed capture |
+| `last_capture` | Time of the last capture, drives the self-heal cadence |
+| `captures` | Running capture counter, reported in the debug log |
 
 ### BackdropBuffer
 
@@ -181,19 +242,105 @@ Maps `stride * height` bytes read-write.
 | `stride` below `width * 4` | `None` |
 | `mmap` fails | `None` |
 
+### BackdropGeometry
+
+```rust
+pub struct BackdropGeometry {
+    last: Vec<(u32, Rectangle<i32, Physical>)>,
+}
+
+pub fn refresh(&mut self, space: &Space<Window>, out_scale: f64) -> bool
+```
+
+Snapshot of every space element's protocol id and rect. Returns `true` when
+anything moved, was added or disappeared. Costs one small vector compare per
+frame and is what catches window moves, which produce no buffer commit.
+
+### dirty_all
+
+```rust
+pub fn dirty_all(tontoo_ui: &mut TontooUiState)
+```
+
+Marks every stream for recapture. Used for changes that affect the whole
+output: wallpaper, crossfade, brightness and night light.
+
+### dirty_intersecting
+
+```rust
+pub fn dirty_intersecting<'a>(
+    streams: &mut impl Iterator<Item = &'a mut BackdropStream>,
+    rect: Rectangle<i32, Physical>,
+    skip_surface_id: u32,
+)
+```
+
+Marks every stream whose `last_region` overlaps `rect`, except the stream
+watching `skip_surface_id`.
+
+Streams that never captured have no `last_region` and are skipped; they
+capture on their first frame anyway.
+
+### dirty_from_commit
+
+```rust
+pub fn dirty_from_commit(
+    tontoo_ui: &mut TontooUiState,
+    space: &Space<Window>,
+    surface: &WlSurface,
+)
+```
+
+Called from `CompositorHandler::commit` for every frame a client paints.
+Resolves the surface to a layer surface (dock, menubar) first, then to a
+space window, converts to output-local physical pixels and calls
+`dirty_intersecting`.
+
+| Case | Effect |
+|---|---|
+| No stream is enabled | Returns immediately |
+| Surface is a layer surface | Dirts overlapping streams with the layer geometry |
+| Surface is a space window | Same, scaled to physical pixels |
+| Surface is a popup or unclaimed | Returns, it sits above the desktop |
+
+### CaptureReason
+
+```rust
+pub enum CaptureReason { Dirty, Moved, SelfHeal }
+```
+
+Reported in the debug log so the capture pattern of a stream can be read off
+the compositor log. `as_str()` yields `dirty`, `moved` or `self-heal`.
+
+### needs_capture
+
+```rust
+pub fn needs_capture(
+    &self,
+    region: Rectangle<i32, Physical>,
+    now: Instant,
+    untracked: bool,
+) -> Option<CaptureReason>
+```
+
+Checked in order: backoff, `dirty`, region changed, self-heal cadence. The
+`untracked` flag gates the cadence and must only be set when an X11 window
+overlaps the rect.
+
 ### capture
 
 ```rust
 pub fn capture(
-    space: &Space<Window>,
+    scratch: &mut BackdropCapture,
     renderer: &mut GlesRenderer,
+    space: &Space<Window>,
     output: &Output,
     window: &Window,
-    wallpaper: Option<(&TextureBuffer<GlesTexture>, &Wallpaper, &str)>,
+    wallpaper: Option<(&TextureBuffer<GlesTexture>, &Wallpaper, &str, Option<f32>)>,
     buffer: &mut BackdropBuffer,
     scale: u32,
-    clear_color: Color32F,
-) -> bool
+    clear_color: [f32; 4],
+) -> Option<BackdropFrame>
 ```
 
 Renders everything below `window` inside the window rect into an offscreen
@@ -202,16 +349,18 @@ texture at `1 / scale` resolution, reads it back and writes it into
 
 | Case | Result |
 |---|---|
-| Window geometry is empty or off-output | `false` |
-| The window is on another output | `false` |
-| The window has no render elements | `false` |
-| The rect does not fit the client buffer | `false` |
-| No wallpaper and no other window below | `false` |
-| Texture allocation or readback fails | `false` |
-| Success | `true` |
+| Window geometry is empty or off-output | `None` |
+| The window is on another output | `None` |
+| The window has no render elements | `None` |
+| The rect does not fit the client buffer | `None` |
+| Texture allocation or readback fails | `None` |
+| Success | `Some(BackdropFrame)` |
 
 Rows are flipped: OpenGL returns the bottom row first, the buffer is
 top-down. All values in the returned `BackdropFrame` are physical pixels.
+
+The readback buffer lives in `BackdropCapture` and is reused across
+captures, so a full-resolution capture does not allocate on every call.
 
 ## Cross References
 

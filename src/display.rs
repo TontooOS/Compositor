@@ -267,6 +267,9 @@ pub fn apply_display(
     if let Some(night_light) = request.night_light {
         state.display_night_light = night_light;
     }
+    // Both overlays are drawn above the desktop, so a stream that already
+    // captured the desktop now shows stale colors.
+    crate::backdrop::dirty_all(&mut state.tontoo_ui.surfaces_mut().map(|s| &mut s.backdrop));
     let mode = match (request.width, request.height, request.refresh) {
         (None, None, None) => current_mode_of(state, &name),
         (width, height, refresh) => {

@@ -72,6 +72,22 @@ for built-in shortcuts.
 
 ## Changelog
 
+- 2026-10-02: Backdrop recapture switched from frame damage to an explicit
+  `dirty` flag. Frame damage is the union of every element including the
+  window itself, so a window repainting its own glass forced a
+  `glReadPixels` on every frame and a static backdrop bought nothing. New:
+  `BackdropStream::{dirty, retry_after, captures}` and `CaptureReason`;
+  `dirty_all`, `dirty_intersecting` and `dirty_from_commit` (called from
+  `CompositorHandler::commit`, resolving layer surfaces and space windows and
+  skipping the watched surface, so the ticking menubar clock no longer
+  invalidates a centred panel); `BackdropGeometry::refresh`, a per-frame
+  `Vec` compare that catches window moves, which produce no buffer commit at
+  all. Wallpaper changes, crossfade completion and display brightness or
+  night light dirty every stream. The self-heal cadence now only runs while
+  an X11 window overlaps the rect, so a still Wayland desktop captures
+  exactly once. Also fixed the captured element range: the slice
+  `render_output` receives is front-to-back, so what sits below a window is
+  the tail after its run, not the prefix. See [Backdrop.md](Backdrop.md).
 - 2026-10-03: Qt applications now get the macOS traffic lights. Qt does not
   paint client-side decoration titlebars through `QStyle`; on Wayland it loads
   a `wayland-decoration-client` plugin named by `QT_WAYLAND_DECORATION`, so

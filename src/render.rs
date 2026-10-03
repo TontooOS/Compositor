@@ -140,7 +140,6 @@ pub fn init_winit(
                     let screen_w = size.w as f32;
                     let screen_h = size.h as f32;
                     let damage = Rectangle::from_size(size);
-                    let frame_damage: Vec<Rectangle<i32, Physical>>;
 
                     {
                         let mut backend_ref = backend.borrow_mut();
@@ -447,27 +446,27 @@ pub fn init_winit(
                                 state.color_scheme.clear_color(),
                             )
                             .unwrap();
-                        frame_damage = result.damage.cloned().unwrap_or_default();
                         // Release the output frame so the renderer can draw
                         // the backdrop stream into its own target.
                         drop(framebuffer);
+                        drop(result);
 
                         // Desktop backdrop stream: clients that render their
                         // own glass blur get the pixels below their window.
-                        let wallpaper_for_backdrop = if let (Some(buf), Some(fade), Some(alpha)) =
-                            (
+                        let wallpaper_for_backdrop =
+                            if let (Some(buf), Some(fade), Some(alpha)) = (
                                 state.wallpaper_fade_buffer.as_ref(),
                                 state.wallpaper_fade.as_ref(),
                                 fade_alpha,
                             ) {
-                            Some((buf, &fade.next, state.wallpaper_fill.as_str(), Some(alpha)))
-                        } else {
-                            state
-                                .wallpaper_buffer
-                                .as_ref()
-                                .zip(state.wallpaper.as_ref())
-                                .map(|(buf, wp)| (buf, wp, state.wallpaper_fill.as_str(), None))
-                        };
+                                Some((buf, &fade.next, state.wallpaper_fill.as_str(), Some(alpha)))
+                            } else {
+                                state
+                                    .wallpaper_buffer
+                                    .as_ref()
+                                    .zip(state.wallpaper.as_ref())
+                                    .map(|(buf, wp)| (buf, wp, state.wallpaper_fill.as_str(), None))
+                            };
                         crate::backdrop::update_streams(
                             &mut state.tontoo_ui,
                             &state.space,
@@ -475,7 +474,7 @@ pub fn init_winit(
                             state.accessibility.reduce_transparency,
                             renderer,
                             &output,
-                            Some(&frame_damage),
+                            &mut state.backdrop_geometry,
                             &mut state.backdrop_capture,
                             state.color_scheme.clear_color(),
                         );

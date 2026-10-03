@@ -108,6 +108,10 @@ pub struct TontooCompositor {
     /// (see `crate::backdrop`). Shared by both backends.
     pub backdrop_capture: crate::backdrop::BackdropCapture,
 
+    /// Per-frame window layout snapshot for the backdrop stream. Window
+    /// moves produce no buffer commit, so this is the only way to see them.
+    pub backdrop_geometry: crate::backdrop::BackdropGeometry,
+
     /// The currently focused window surface (for 2-click behavior and active app tracking).
     pub focused_surface: Option<WlSurface>,
 
@@ -269,6 +273,7 @@ impl TontooCompositor {
             shell: ShellState::new(),
             tontoo_ui: TontooUiState::default(),
             backdrop_capture: crate::backdrop::BackdropCapture::new(),
+            backdrop_geometry: crate::backdrop::BackdropGeometry::new(),
             focused_surface: None,
             minimized_windows: Vec::new(),
             minimized_icons: HashSet::new(),
@@ -440,6 +445,8 @@ impl TontooCompositor {
         });
         self.wallpaper_fade_buffer = None;
         tracing::info!("wallpaper crossfade started: {}", path.display());
+        // Every stream shows the old wallpaper right now.
+        crate::backdrop::dirty_all(&mut self.tontoo_ui.surfaces_mut().map(|s| &mut s.backdrop));
         self.request_redraw();
         Ok(())
     }
@@ -474,6 +481,8 @@ impl TontooCompositor {
                 "wallpaper crossfade finished: {}",
                 self.wallpaper_path.display()
             );
+            // The streams still hold wallpaper frames from before the fade.
+            crate::backdrop::dirty_all(&mut self.tontoo_ui.surfaces_mut().map(|s| &mut s.backdrop));
             self.request_redraw();
         }
     }

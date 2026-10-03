@@ -630,6 +630,7 @@ pub fn try_render_all(state: &mut TontooCompositor) {
     let render_cache = &mut state.render_cache;
     let tontoo_ui = &mut state.tontoo_ui;
     let backdrop_capture = &mut state.backdrop_capture;
+    let backdrop_geometry = &mut state.backdrop_geometry;
     let reduce_transparency = state.accessibility.reduce_transparency;
     let window_controls = &mut state.shell.window_controls;
     let color_scheme = state.color_scheme;
@@ -664,6 +665,7 @@ pub fn try_render_all(state: &mut TontooCompositor) {
                 display_night_light,
                 render_cache,
                 tontoo_ui,
+                backdrop_geometry,
                 backdrop_capture,
                 reduce_transparency,
                 state.focused_surface.as_ref(),
@@ -749,6 +751,7 @@ fn render_surface(
     display_night_light: bool,
     render_cache: &mut crate::render_cache::RenderCache,
     tontoo_ui: &mut crate::handlers::tontoo_ui::TontooUiState,
+    backdrop_geometry: &mut crate::backdrop::BackdropGeometry,
     backdrop_capture: &mut crate::backdrop::BackdropCapture,
     reduce_transparency: bool,
     focused_surface: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
@@ -775,17 +778,18 @@ fn render_surface(
                 .zip(wallpaper)
                 .map(|(buf, wp)| (buf, wp, wallpaper_fill, None))
         };
-        crate::backdrop::update_streams(
+crate::backdrop::update_streams(
             tontoo_ui,
             space,
             backdrop_wallpaper,
             reduce_transparency,
             renderer,
             output,
-            None,
+            backdrop_geometry,
             backdrop_capture,
             clear_color,
         );
+
     }
 
     let space_elements = space_render_elements(renderer, std::iter::once(space), output, 1.0)
