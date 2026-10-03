@@ -125,6 +125,11 @@ pub fn apply_color_scheme_env(scheme: ColorScheme) {
         // Qt bridge (tontoo-theme-apply writes the matching qt5ct/qt6ct
         // configs): every GUI child inherits the themed Qt platform.
         std::env::set_var("QT_QPA_PLATFORMTHEME", "qt5ct");
+        // Qt draws client-side decoration titlebars through its own
+        // wayland-decoration-client plugin, never through QStyle. Pick the
+        // TontooOS plugin so Qt windows get macOS traffic lights instead of
+        // the stock "bradient" buttons on the right.
+        std::env::set_var("QT_WAYLAND_DECORATION", "tontoo");
         // Prefer native Wayland in Electron apps, fall back to X11.
         std::env::set_var("ELECTRON_OZONE_PLATFORM_HINT", "auto");
     }
